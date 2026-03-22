@@ -15,7 +15,7 @@ function mockProcess(stdout: string): ChildProcess {
   const proc = new EventEmitter() as ChildProcess;
   proc.stdout = new EventEmitter() as any;
   proc.stderr = new EventEmitter() as any;
-  proc.stdin = { write: vi.fn(), end: vi.fn() } as any;
+  proc.stdin = null as any;
 
   setTimeout(() => {
     (proc.stdout as EventEmitter).emit("data", Buffer.from(stdout));

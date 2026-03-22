@@ -1,26 +1,31 @@
 import type { AgentAdapter } from "./adapters/agent-adapter.js";
 import type { Message, OrchestratorConfig, OrchestratorResult, AgentName } from "./types.js";
 import { detectConvergence, checkDiffStability } from "./convergence.js";
-import { initiatorPrompt, reviewerPrompt, rebuttalPrompt, escalationPrompt, formatTurnPrompt } from "./prompts.js";
+import { initiatorPrompt, reviewerPrompt, rebuttalPrompt, escalationPrompt, userGuidancePrompt, formatTurnPrompt } from "./prompts.js";
 import { formatConsensus, formatEscalation } from "./formatter.js";
 import { SessionManager } from "./session.js";
+
+export type TurnCallback = (turn: number, agent: AgentName, role: string) => void;
 
 export class Orchestrator {
   private agentA: AgentAdapter;
   private agentB: AgentAdapter;
   private session: SessionManager;
   private config: OrchestratorConfig;
+  private onTurnStart?: TurnCallback;
 
   constructor(
     agentA: AgentAdapter,
     agentB: AgentAdapter,
     session: SessionManager,
-    config: OrchestratorConfig
+    config: OrchestratorConfig,
+    onTurnStart?: TurnCallback
   ) {
     this.agentA = config.startWith === agentA.name ? agentA : agentB;
     this.agentB = config.startWith === agentA.name ? agentB : agentA;
     this.config = config;
     this.session = session;
+    this.onTurnStart = onTurnStart;
   }
 
   async run(userPrompt: string): Promise<OrchestratorResult> {
@@ -30,8 +35,9 @@ export class Orchestrator {
 
     // Turn 1: Initiator
     turn++;
+    this.onTurnStart?.(turn, this.agentA.name, "initiator");
     const initResponse = await this.agentA.send(
-      formatTurnPrompt(initiatorPrompt(this.agentB.name), "", userPrompt),
+      formatTurnPrompt(initiatorPrompt(this.agentB.name), [], userPrompt),
       {
         sessionId: meta.sessionId,
         history: messages,
@@ -52,14 +58,14 @@ export class Orchestrator {
       turn++;
 
       // Reviewer turn
-      const prevContent = messages[messages.length - 1].content;
       const isFirstReview = turn === 2;
       const sysPrompt = isFirstReview
         ? reviewerPrompt(currentInitiator.name)
         : rebuttalPrompt(currentInitiator.name);
 
+      this.onTurnStart?.(turn, currentReviewer.name, isFirstReview ? "reviewer" : "rebuttal");
       const reviewResponse = await currentReviewer.send(
-        formatTurnPrompt(sysPrompt, prevContent, turn === 2 ? userPrompt : undefined),
+        formatTurnPrompt(sysPrompt, messages, userPrompt),
         {
           sessionId: meta.sessionId,
           history: messages,
@@ -83,7 +89,7 @@ export class Orchestrator {
         const summary = formatConsensus(messages, turn);
         this.session.saveSummary(meta.sessionId, summary);
         this.session.updateStatus(meta.sessionId, "completed");
-        return { type: "consensus", rounds: turn, summary, messages };
+        return { type: "consensus", sessionId: meta.sessionId, rounds: turn, summary, messages };
       }
 
       // Swap roles for next cycle
@@ -94,8 +100,9 @@ export class Orchestrator {
     turn++;
     const escPrompt = escalationPrompt();
 
+    this.onTurnStart?.(turn, this.agentA.name, "escalation");
     const escResponseA = await this.agentA.send(
-      formatTurnPrompt(escPrompt, messages[messages.length - 1].content, userPrompt),
+      formatTurnPrompt(escPrompt, messages, userPrompt),
       {
         sessionId: meta.sessionId,
         history: messages,
@@ -107,8 +114,9 @@ export class Orchestrator {
     messages.push(escMsgA);
     this.session.appendMessage(meta.sessionId, escMsgA);
 
+    this.onTurnStart?.(turn, this.agentB.name, "escalation");
     const escResponseB = await this.agentB.send(
-      formatTurnPrompt(escPrompt, messages[messages.length - 2].content, userPrompt),
+      formatTurnPrompt(escPrompt, messages, userPrompt),
       {
         sessionId: meta.sessionId,
         history: messages,
@@ -123,7 +131,195 @@ export class Orchestrator {
     const summary = formatEscalation(messages.slice(-2), this.config.guardrailRounds);
     this.session.saveSummary(meta.sessionId, summary);
     this.session.updateStatus(meta.sessionId, "escalated");
-    return { type: "escalation", rounds: this.config.guardrailRounds, summary, messages };
+    return { type: "escalation", sessionId: meta.sessionId, rounds: this.config.guardrailRounds, summary, messages };
+  }
+
+  async resume(sessionId: string, userGuidance?: string): Promise<OrchestratorResult> {
+    const { meta, messages } = this.session.load(sessionId);
+    const lastTurn = messages.length > 0 ? messages[messages.length - 1].turn : 0;
+
+    // If user provided guidance, continue with it
+    if (userGuidance) {
+      const fakeResult: OrchestratorResult = {
+        type: "escalation",
+        sessionId,
+        rounds: lastTurn,
+        summary: "",
+        messages,
+      };
+      return this.continueWithGuidance(fakeResult, userGuidance, sessionId);
+    }
+
+    // Otherwise, pick up where we left off — re-enter the review loop
+    const userPrompt = meta.prompt;
+    let turn = lastTurn;
+
+    // Determine whose turn it is next based on message count
+    let currentReviewer: AgentAdapter;
+    let currentInitiator: AgentAdapter;
+    if (messages.length % 2 === 1) {
+      // Odd number of messages — agent B (reviewer) goes next
+      currentReviewer = this.agentB;
+      currentInitiator = this.agentA;
+    } else {
+      currentReviewer = this.agentA;
+      currentInitiator = this.agentB;
+    }
+
+    this.session.updateStatus(sessionId, "active");
+
+    while (turn < lastTurn + this.config.guardrailRounds) {
+      turn++;
+
+      this.onTurnStart?.(turn, currentReviewer.name, "rebuttal");
+      const reviewResponse = await currentReviewer.send(
+        formatTurnPrompt(rebuttalPrompt(currentInitiator.name), messages, userPrompt),
+        {
+          sessionId,
+          history: messages,
+          workingDirectory: this.config.workingDirectory,
+          systemPrompt: rebuttalPrompt(currentInitiator.name),
+        }
+      );
+
+      const reviewMsg = this.toMessage("reviewer", currentReviewer.name, turn, "review", reviewResponse);
+      messages.push(reviewMsg);
+      this.session.appendMessage(sessionId, reviewMsg);
+
+      if (detectConvergence(messages) || checkDiffStability(messages)) {
+        const summary = formatConsensus(messages, turn);
+        this.session.saveSummary(sessionId, summary);
+        this.session.updateStatus(sessionId, "completed");
+        return { type: "consensus", sessionId, rounds: turn, summary, messages };
+      }
+
+      [currentReviewer, currentInitiator] = [currentInitiator, currentReviewer];
+    }
+
+    // Escalation
+    turn++;
+    const escPrompt = escalationPrompt();
+
+    this.onTurnStart?.(turn, this.agentA.name, "escalation");
+    const escA = await this.agentA.send(
+      formatTurnPrompt(escPrompt, messages, userPrompt),
+      { sessionId, history: messages, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt }
+    );
+    const escMsgA = this.toMessage("initiator", this.agentA.name, turn, "deadlock", escA);
+    messages.push(escMsgA);
+    this.session.appendMessage(sessionId, escMsgA);
+
+    this.onTurnStart?.(turn, this.agentB.name, "escalation");
+    const escB = await this.agentB.send(
+      formatTurnPrompt(escPrompt, messages, userPrompt),
+      { sessionId, history: messages, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt }
+    );
+    const escMsgB = this.toMessage("reviewer", this.agentB.name, turn, "deadlock", escB);
+    messages.push(escMsgB);
+    this.session.appendMessage(sessionId, escMsgB);
+
+    const summary = formatEscalation(messages.slice(-2), turn);
+    this.session.saveSummary(sessionId, summary);
+    this.session.updateStatus(sessionId, "escalated");
+    return { type: "escalation", sessionId, rounds: turn, summary, messages };
+  }
+
+  async continueWithGuidance(
+    previousResult: OrchestratorResult,
+    userGuidance: string,
+    sessionId: string
+  ): Promise<OrchestratorResult> {
+    const messages = [...previousResult.messages];
+    const userPrompt = userGuidance;
+    let turn = previousResult.rounds + 2; // after escalation turns
+
+    // Inject user guidance as a special message
+    const guidanceMsg: Message = {
+      role: "initiator",
+      agent: "claude", // attributed to user, but stored for history
+      turn,
+      type: "debate",
+      content: `[USER GUIDANCE]: ${userGuidance}`,
+      timestamp: new Date().toISOString(),
+    };
+    messages.push(guidanceMsg);
+    this.session.appendMessage(sessionId, guidanceMsg);
+    this.session.updateStatus(sessionId, "active");
+
+    // Agent A responds to user guidance
+    turn++;
+    this.onTurnStart?.(turn, this.agentA.name, "guided");
+    const responseA = await this.agentA.send(
+      formatTurnPrompt(userGuidancePrompt(this.agentB.name), messages, userGuidance),
+      {
+        sessionId,
+        history: messages,
+        workingDirectory: this.config.workingDirectory,
+        systemPrompt: userGuidancePrompt(this.agentB.name),
+      }
+    );
+    const msgA = this.toMessage("initiator", this.agentA.name, turn, "review", responseA);
+    messages.push(msgA);
+    this.session.appendMessage(sessionId, msgA);
+
+    // Review loop (same as main run)
+    let currentReviewer = this.agentB;
+    let currentInitiator = this.agentA;
+
+    for (let round = 0; round < this.config.guardrailRounds; round++) {
+      turn++;
+
+      this.onTurnStart?.(turn, currentReviewer.name, "rebuttal");
+      const reviewResponse = await currentReviewer.send(
+        formatTurnPrompt(rebuttalPrompt(currentInitiator.name), messages, userGuidance),
+        {
+          sessionId,
+          history: messages,
+          workingDirectory: this.config.workingDirectory,
+          systemPrompt: rebuttalPrompt(currentInitiator.name),
+        }
+      );
+
+      const reviewMsg = this.toMessage("reviewer", currentReviewer.name, turn, "review", reviewResponse);
+      messages.push(reviewMsg);
+      this.session.appendMessage(sessionId, reviewMsg);
+
+      if (detectConvergence(messages) || checkDiffStability(messages)) {
+        const summary = formatConsensus(messages, turn);
+        this.session.saveSummary(sessionId, summary);
+        this.session.updateStatus(sessionId, "completed");
+        return { type: "consensus", sessionId, rounds: turn, summary, messages };
+      }
+
+      [currentReviewer, currentInitiator] = [currentInitiator, currentReviewer];
+    }
+
+    // Escalate again
+    turn++;
+    const escPrompt = escalationPrompt();
+
+    this.onTurnStart?.(turn, this.agentA.name, "escalation");
+    const escA = await this.agentA.send(
+      formatTurnPrompt(escPrompt, messages, userGuidance),
+      { sessionId, history: messages, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt }
+    );
+    const escMsgA = this.toMessage("initiator", this.agentA.name, turn, "deadlock", escA);
+    messages.push(escMsgA);
+    this.session.appendMessage(sessionId, escMsgA);
+
+    this.onTurnStart?.(turn, this.agentB.name, "escalation");
+    const escB = await this.agentB.send(
+      formatTurnPrompt(escPrompt, messages, userGuidance),
+      { sessionId, history: messages, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt }
+    );
+    const escMsgB = this.toMessage("reviewer", this.agentB.name, turn, "deadlock", escB);
+    messages.push(escMsgB);
+    this.session.appendMessage(sessionId, escMsgB);
+
+    const summary = formatEscalation(messages.slice(-2), turn);
+    this.session.saveSummary(sessionId, summary);
+    this.session.updateStatus(sessionId, "escalated");
+    return { type: "escalation", sessionId, rounds: turn, summary, messages };
   }
 
   private toMessage(

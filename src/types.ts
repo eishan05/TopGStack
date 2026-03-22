@@ -54,6 +54,7 @@ export interface OrchestratorConfig {
 
 export interface OrchestratorResult {
   type: "consensus" | "escalation";
+  sessionId: string;
   rounds: number;
   summary: string;
   messages: Message[];

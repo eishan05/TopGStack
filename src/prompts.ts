@@ -52,13 +52,36 @@ Instructions:
 - End with [CONVERGENCE: disagree]`;
 }
 
-export function formatTurnPrompt(systemPrompt: string, previousResponse: string, userPrompt?: string): string {
+export function userGuidancePrompt(otherAgent: AgentName): string {
+  return `The user has reviewed the escalation report and provided guidance. You are resuming collaboration with ${otherAgent}.
+
+Instructions:
+- Incorporate the user's guidance into your response
+- The user's direction takes priority over your previous position
+- Work with the other agent to converge on a solution that follows the user's guidance
+- End your response with a convergence signal: [CONVERGENCE: agree|disagree|partial]`;
+}
+
+import type { Message } from "./types.js";
+
+export function formatConversationHistory(messages: Message[]): string {
+  if (messages.length === 0) return "";
+  let history = "## Conversation So Far\n\n";
+  for (const msg of messages) {
+    const label = msg.agent.charAt(0).toUpperCase() + msg.agent.slice(1);
+    history += `[Turn ${msg.turn}] ${label} (${msg.role}):\n${msg.content}\n\n`;
+  }
+  return history;
+}
+
+export function formatTurnPrompt(systemPrompt: string, messages: Message[], userPrompt?: string): string {
   let prompt = systemPrompt + "\n\n";
   if (userPrompt) {
     prompt += `## User's Original Request\n\n${userPrompt}\n\n`;
   }
-  if (previousResponse) {
-    prompt += `## Previous Response\n\n${previousResponse}\n\n`;
+  const history = formatConversationHistory(messages);
+  if (history) {
+    prompt += history;
   }
   prompt += "## Your Response\n\n";
   return prompt;

@@ -15,10 +15,10 @@ export class ClaudeAdapter implements AgentAdapter {
     const fullPrompt = context.systemPrompt + "\n\n" + prompt;
 
     return new Promise((resolve, reject) => {
-      const proc = spawn("claude", ["-p", "--output-format", "json"], {
+      const proc = spawn("claude", ["-p", fullPrompt, "--output-format", "json"], {
         cwd: context.workingDirectory,
         env: { ...process.env },
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe"],
       });
 
       let stdout = "";
@@ -58,9 +58,6 @@ export class ClaudeAdapter implements AgentAdapter {
           });
         }
       });
-
-      proc.stdin?.write(fullPrompt);
-      proc.stdin?.end();
     });
   }
 }
