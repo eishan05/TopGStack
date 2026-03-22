@@ -85,6 +85,14 @@ program
     const codex = new CodexAdapter(config.timeoutMs, config.codex);
     const session = new SessionManager();
 
+    // When resuming, restore the session's stored Codex config
+    if (opts.resume) {
+      const loaded = session.load(opts.resume as string);
+      if (loaded.meta.config.codex) {
+        codex.updateConfig(loaded.meta.config.codex);
+      }
+    }
+
     const orchestrator = new Orchestrator(claude, codex, session, config, (turn, agent, role) => {
       const label = agent.charAt(0).toUpperCase() + agent.slice(1);
       console.error(`[Turn ${turn}] ${label} (${role}): responding...`);
