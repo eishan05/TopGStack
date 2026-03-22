@@ -96,3 +96,39 @@ describe("checkDiffStability", () => {
     expect(checkDiffStability(messages)).toBe(false);
   });
 });
+
+describe("convergence with user-prompt filtering", () => {
+  it("should ignore user-prompt messages in convergence detection", () => {
+    const messages: Message[] = [
+      makeMsg("claude", "Here is my proposal.\n[CONVERGENCE: agree]", "agree"),
+      makeMsg("codex", "I agree.\n[CONVERGENCE: agree]", "agree"),
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 3,
+        type: "user-prompt",
+        content: "[USER PROMPT #2]: new question",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+    expect(detectConvergence(messages)).toBe(true);
+  });
+
+  it("should ignore user-prompt messages in diff stability check", () => {
+    const messages: Message[] = [
+      makeMsg("claude", "Use approach A with pattern X"),
+      makeMsg("codex", "I agree. Use approach A with pattern X"),
+      makeMsg("claude", "Confirmed. Use approach A with pattern X"),
+      makeMsg("codex", "Use approach A with pattern X"),
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 5,
+        type: "user-prompt",
+        content: "[USER PROMPT #2]: something else entirely",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+    expect(checkDiffStability(messages)).toBe(true);
+  });
+});

@@ -6,6 +6,7 @@ import { Orchestrator } from "./orchestrator.js";
 import { ClaudeAdapter } from "./adapters/claude-adapter.js";
 import { CodexAdapter } from "./adapters/codex-adapter.js";
 import { SessionManager } from "./session.js";
+import { startRepl } from "./repl.js";
 import type { AgentName, OrchestratorConfig } from "./types.js";
 
 function askUser(question: string): Promise<string> {
@@ -43,11 +44,6 @@ program
       process.exit(1);
     }
 
-    if (!prompt && !opts.resume) {
-      console.error("Error: provide a prompt or use --resume <sessionId>");
-      process.exit(1);
-    }
-
     const config: OrchestratorConfig = {
       startWith: opts.startWith as AgentName,
       workingDirectory: opts.cwd,
@@ -56,6 +52,19 @@ program
       outputFormat: opts.output as "text" | "json",
     };
 
+    // Case 1: No prompt and no --resume → launch REPL
+    if (!prompt && !opts.resume) {
+      await startRepl(config);
+      return;
+    }
+
+    // Case 2: --resume with no prompt → launch REPL with loaded session
+    if (opts.resume && !prompt) {
+      await startRepl(config, opts.resume as string);
+      return;
+    }
+
+    // Case 3 & 4: One-shot mode (existing behavior)
     const claude = new ClaudeAdapter(config.timeoutMs);
     const codex = new CodexAdapter(config.timeoutMs);
     const session = new SessionManager();
@@ -68,22 +77,14 @@ program
     try {
       let result;
 
-      if (opts.resume) {
-        // Resume existing session
+      if (opts.resume && prompt) {
+        // Resume existing session with guidance (one-shot)
         const sessionId = opts.resume as string;
         console.error(`Resuming session: ${sessionId}`);
-
-        if (prompt) {
-          // User provided guidance along with resume
-          console.error(`With guidance: "${prompt}"\n`);
-          result = await orchestrator.resume(sessionId, prompt);
-        } else {
-          // Just continue where we left off
-          console.error("");
-          result = await orchestrator.resume(sessionId);
-        }
+        console.error(`With guidance: "${prompt}"\n`);
+        result = await orchestrator.resume(sessionId, prompt);
       } else {
-        // New session
+        // New one-shot session
         console.error(`Starting collaboration (${config.startWith} goes first)...`);
         result = await orchestrator.run(prompt!);
         console.error(`Session ID: ${result.sessionId}`);

@@ -7,7 +7,8 @@ export function formatConsensus(messages: Message[], rounds: number): string {
   let output = `[CONSENSUS after ${rounds} rounds]\n\n`;
   output += `## Agreed Approach\n\n`;
 
-  const finalMsg = messages[messages.length - 1];
+  const agentMessages = messages.filter((m) => m.type !== "user-prompt");
+  const finalMsg = agentMessages[agentMessages.length - 1];
   output += finalMsg.content.replace(/\[CONVERGENCE:.*?\]/gi, "").trim();
   output += "\n\n";
 
@@ -47,6 +48,7 @@ export function formatEscalation(messages: Message[], rounds: number): string {
 function getLastMessagePerAgent(messages: Message[]): Message[] {
   const byAgent = new Map<string, Message>();
   for (const msg of messages) {
+    if (msg.type === "user-prompt") continue;
     byAgent.set(msg.agent, msg);
   }
   return [...byAgent.values()];

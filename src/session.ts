@@ -89,4 +89,30 @@ export class SessionManager {
     meta.updatedAt = new Date().toISOString();
     fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
   }
+
+  listSessions(): SessionMeta[] {
+    if (!fs.existsSync(this.baseDir)) return [];
+    const entries = fs.readdirSync(this.baseDir, { withFileTypes: true });
+    const sessions: SessionMeta[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const metaPath = path.join(this.baseDir, entry.name, "meta.json");
+      if (!fs.existsSync(metaPath)) continue;
+      try {
+        const meta: SessionMeta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+        sessions.push(meta);
+      } catch {
+        // skip corrupted sessions
+      }
+    }
+    return sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }
+
+  updatePrompt(sessionId: string, prompt: string): void {
+    const metaPath = path.join(this.sessionDir(sessionId), "meta.json");
+    const meta: SessionMeta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+    meta.prompt = prompt;
+    meta.updatedAt = new Date().toISOString();
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+  }
 }

@@ -134,6 +134,102 @@ export class Orchestrator {
     return { type: "escalation", sessionId: meta.sessionId, rounds: this.config.guardrailRounds, summary, messages };
   }
 
+  async runWithHistory(
+    userPrompt: string,
+    existingMessages: Message[],
+    sessionId: string,
+    signal?: AbortSignal
+  ): Promise<OrchestratorResult> {
+    const messages: Message[] = [...existingMessages];
+    let turn = Math.max(...existingMessages.map((m) => m.turn), 0);
+
+    // Turn 1: Initiator
+    turn++;
+    this.onTurnStart?.(turn, this.agentA.name, "initiator");
+    const initResponse = await this.agentA.send(
+      formatTurnPrompt(initiatorPrompt(this.agentB.name), messages, userPrompt),
+      {
+        sessionId,
+        history: messages,
+        workingDirectory: this.config.workingDirectory,
+        systemPrompt: initiatorPrompt(this.agentB.name),
+      },
+      signal
+    );
+
+    const initMsg = this.toMessage("initiator", this.agentA.name, turn, "code", initResponse);
+    messages.push(initMsg);
+    this.session.appendMessage(sessionId, initMsg);
+
+    // Review loop
+    let currentReviewer = this.agentB;
+    let currentInitiator = this.agentA;
+    const maxTurn = turn + this.config.guardrailRounds - 1;
+
+    while (turn < maxTurn) {
+      turn++;
+
+      const isFirstReview = messages.filter(m => m.type !== "user-prompt").length === 2 + existingMessages.filter(m => m.type !== "user-prompt").length;
+      const sysPrompt = isFirstReview
+        ? reviewerPrompt(currentInitiator.name)
+        : rebuttalPrompt(currentInitiator.name);
+
+      this.onTurnStart?.(turn, currentReviewer.name, isFirstReview ? "reviewer" : "rebuttal");
+      const reviewResponse = await currentReviewer.send(
+        formatTurnPrompt(sysPrompt, messages, userPrompt),
+        {
+          sessionId,
+          history: messages,
+          workingDirectory: this.config.workingDirectory,
+          systemPrompt: sysPrompt,
+        },
+        signal
+      );
+
+      const reviewMsg = this.toMessage("reviewer", currentReviewer.name, turn, "review", reviewResponse);
+      messages.push(reviewMsg);
+      this.session.appendMessage(sessionId, reviewMsg);
+
+      if (detectConvergence(messages) || checkDiffStability(messages)) {
+        const summary = formatConsensus(messages, turn);
+        this.session.saveSummary(sessionId, summary);
+        this.session.updateStatus(sessionId, "completed");
+        return { type: "consensus", sessionId, rounds: turn, summary, messages };
+      }
+
+      [currentReviewer, currentInitiator] = [currentInitiator, currentReviewer];
+    }
+
+    // Escalation
+    turn++;
+    const escPrompt = escalationPrompt();
+
+    this.onTurnStart?.(turn, this.agentA.name, "escalation");
+    const escA = await this.agentA.send(
+      formatTurnPrompt(escPrompt, messages, userPrompt),
+      { sessionId, history: messages, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt },
+      signal
+    );
+    const escMsgA = this.toMessage("initiator", this.agentA.name, turn, "deadlock", escA);
+    messages.push(escMsgA);
+    this.session.appendMessage(sessionId, escMsgA);
+
+    this.onTurnStart?.(turn, this.agentB.name, "escalation");
+    const escB = await this.agentB.send(
+      formatTurnPrompt(escPrompt, messages, userPrompt),
+      { sessionId, history: messages, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt },
+      signal
+    );
+    const escMsgB = this.toMessage("reviewer", this.agentB.name, turn, "deadlock", escB);
+    messages.push(escMsgB);
+    this.session.appendMessage(sessionId, escMsgB);
+
+    const summary = formatEscalation(messages.slice(-2), turn);
+    this.session.saveSummary(sessionId, summary);
+    this.session.updateStatus(sessionId, "escalated");
+    return { type: "escalation", sessionId, rounds: turn, summary, messages };
+  }
+
   async resume(sessionId: string, userGuidance?: string): Promise<OrchestratorResult> {
     const { meta, messages } = this.session.load(sessionId);
     const lastTurn = messages.length > 0 ? messages[messages.length - 1].turn : 0;
@@ -227,7 +323,8 @@ export class Orchestrator {
   async continueWithGuidance(
     previousResult: OrchestratorResult,
     userGuidance: string,
-    sessionId: string
+    sessionId: string,
+    signal?: AbortSignal
   ): Promise<OrchestratorResult> {
     const messages = [...previousResult.messages];
     const userPrompt = userGuidance;
@@ -256,7 +353,8 @@ export class Orchestrator {
         history: messages,
         workingDirectory: this.config.workingDirectory,
         systemPrompt: userGuidancePrompt(this.agentB.name),
-      }
+      },
+      signal
     );
     const msgA = this.toMessage("initiator", this.agentA.name, turn, "review", responseA);
     messages.push(msgA);
@@ -277,7 +375,8 @@ export class Orchestrator {
           history: messages,
           workingDirectory: this.config.workingDirectory,
           systemPrompt: rebuttalPrompt(currentInitiator.name),
-        }
+        },
+        signal
       );
 
       const reviewMsg = this.toMessage("reviewer", currentReviewer.name, turn, "review", reviewResponse);
@@ -301,7 +400,8 @@ export class Orchestrator {
     this.onTurnStart?.(turn, this.agentA.name, "escalation");
     const escA = await this.agentA.send(
       formatTurnPrompt(escPrompt, messages, userGuidance),
-      { sessionId, history: messages, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt }
+      { sessionId, history: messages, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt },
+      signal
     );
     const escMsgA = this.toMessage("initiator", this.agentA.name, turn, "deadlock", escA);
     messages.push(escMsgA);
@@ -310,7 +410,8 @@ export class Orchestrator {
     this.onTurnStart?.(turn, this.agentB.name, "escalation");
     const escB = await this.agentB.send(
       formatTurnPrompt(escPrompt, messages, userGuidance),
-      { sessionId, history: messages, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt }
+      { sessionId, history: messages, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt },
+      signal
     );
     const escMsgB = this.toMessage("reviewer", this.agentB.name, turn, "deadlock", escB);
     messages.push(escMsgB);

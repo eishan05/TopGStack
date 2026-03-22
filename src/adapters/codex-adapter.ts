@@ -13,7 +13,7 @@ export class CodexAdapter implements AgentAdapter {
     this.timeoutMs = timeoutMs;
   }
 
-  async send(prompt: string, context: ConversationContext): Promise<AgentResponse> {
+  async send(prompt: string, context: ConversationContext, signal?: AbortSignal): Promise<AgentResponse> {
     const fullPrompt = context.systemPrompt + "\n\n" + prompt;
 
     const thread = await this.client.startThread({
@@ -25,14 +25,20 @@ export class CodexAdapter implements AgentAdapter {
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error(`Codex adapter timed out after ${this.timeoutMs}ms`)), this.timeoutMs)
       ),
+      ...(signal
+        ? [new Promise<never>((_, reject) => {
+            if (signal.aborted) reject(new Error("aborted"));
+            signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          })]
+        : []),
     ]);
 
     const content = result.finalResponse ?? String(result);
-    const signal = parseConvergenceTag(content);
+    const convergenceSignal = parseConvergenceTag(content);
 
     return {
       content,
-      convergenceSignal: signal ?? undefined,
+      convergenceSignal: convergenceSignal ?? undefined,
     };
   }
 }

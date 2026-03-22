@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { Orchestrator } from "../src/orchestrator.js";
 import type { AgentAdapter } from "../src/adapters/agent-adapter.js";
-import type { AgentResponse, ConversationContext, OrchestratorConfig } from "../src/types.js";
+import type { AgentResponse, ConversationContext, OrchestratorConfig, Message } from "../src/types.js";
 import { SessionManager } from "../src/session.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -19,14 +19,15 @@ function createMockAdapter(name: "claude" | "codex", responses: AgentResponse[])
   };
 }
 
+const defaultConfig: OrchestratorConfig = {
+  startWith: "claude",
+  workingDirectory: "/tmp",
+  guardrailRounds: 8,
+  timeoutMs: 120000,
+  outputFormat: "text",
+};
+
 describe("Orchestrator", () => {
-  const defaultConfig: OrchestratorConfig = {
-    startWith: "claude",
-    workingDirectory: "/tmp",
-    guardrailRounds: 8,
-    timeoutMs: 120000,
-    outputFormat: "text",
-  };
 
   it("should reach consensus in 2 rounds when both agree immediately", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "topg-orch-"));
@@ -88,6 +89,48 @@ describe("Orchestrator", () => {
 
     expect(result.type).toBe("consensus");
     expect(result.rounds).toBeGreaterThan(2);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+describe("runWithHistory", () => {
+  it("should start with existing messages and reach consensus", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "topg-hist-"));
+    const session = new SessionManager(tmpDir);
+
+    const existingMessages: Message[] = [
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 1,
+        type: "code",
+        content: "Previous round response.",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+
+    const claude = createMockAdapter("claude", [
+      { content: "Building on prior context.\n[CONVERGENCE: agree]", convergenceSignal: "agree" },
+    ]);
+    const codex = createMockAdapter("codex", [
+      { content: "I agree with this approach.\n[CONVERGENCE: agree]", convergenceSignal: "agree" },
+    ]);
+
+    const config = { ...defaultConfig, guardrailRounds: 8 };
+    const orch = new Orchestrator(claude, codex, session, config);
+
+    const meta = session.create("test prompt", config);
+
+    const result = await orch.runWithHistory(
+      "New question",
+      existingMessages,
+      meta.sessionId
+    );
+
+    expect(result.type).toBe("consensus");
+    expect(result.messages.length).toBeGreaterThan(existingMessages.length);
+    expect(result.sessionId).toBe(meta.sessionId);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });

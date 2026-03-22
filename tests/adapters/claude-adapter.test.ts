@@ -56,4 +56,23 @@ describe("ClaudeAdapter", () => {
     const adapter = new ClaudeAdapter();
     expect(adapter.name).toBe("claude");
   });
+
+  it("should abort when signal is triggered", async () => {
+    const proc = new EventEmitter() as ChildProcess;
+    proc.stdout = new EventEmitter() as any;
+    proc.stderr = new EventEmitter() as any;
+    proc.stdin = null as any;
+    proc.kill = vi.fn();
+
+    vi.mocked(spawn).mockReturnValue(proc);
+
+    const controller = new AbortController();
+    const adapter = new ClaudeAdapter();
+    const promise = adapter.send("test prompt", ctx, controller.signal);
+
+    setTimeout(() => controller.abort(), 50);
+
+    await expect(promise).rejects.toThrow("aborted");
+    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+  });
 });

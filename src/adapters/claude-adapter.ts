@@ -11,7 +11,7 @@ export class ClaudeAdapter implements AgentAdapter {
     this.timeoutMs = timeoutMs;
   }
 
-  async send(prompt: string, context: ConversationContext): Promise<AgentResponse> {
+  async send(prompt: string, context: ConversationContext, signal?: AbortSignal): Promise<AgentResponse> {
     const fullPrompt = context.systemPrompt + "\n\n" + prompt;
 
     return new Promise((resolve, reject) => {
@@ -36,8 +36,23 @@ export class ClaudeAdapter implements AgentAdapter {
         reject(new Error(`Claude adapter timed out after ${this.timeoutMs}ms`));
       }, this.timeoutMs);
 
+      if (signal) {
+        if (signal.aborted) {
+          proc.kill("SIGTERM");
+          clearTimeout(timeout);
+          reject(new Error("aborted"));
+          return;
+        }
+        signal.addEventListener("abort", () => {
+          proc.kill("SIGTERM");
+          clearTimeout(timeout);
+          reject(new Error("aborted"));
+        }, { once: true });
+      }
+
       proc.on("close", (code) => {
         clearTimeout(timeout);
+        if (signal?.aborted) return;
         if (code !== 0) {
           reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
           return;
@@ -45,16 +60,16 @@ export class ClaudeAdapter implements AgentAdapter {
         try {
           const parsed = JSON.parse(stdout);
           const content = parsed.result ?? parsed.content ?? stdout;
-          const signal = parseConvergenceTag(content);
+          const convergenceSignal = parseConvergenceTag(content);
           resolve({
             content,
-            convergenceSignal: signal ?? undefined,
+            convergenceSignal: convergenceSignal ?? undefined,
           });
         } catch {
-          const signal = parseConvergenceTag(stdout);
+          const convergenceSignal = parseConvergenceTag(stdout);
           resolve({
             content: stdout,
-            convergenceSignal: signal ?? undefined,
+            convergenceSignal: convergenceSignal ?? undefined,
           });
         }
       });

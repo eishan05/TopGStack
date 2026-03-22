@@ -84,3 +84,39 @@ describe("formatEscalation", () => {
     expect(output).toContain("Codex");
   });
 });
+
+describe("formatter with user-prompt filtering", () => {
+  it("should ignore user-prompt messages in getLastMessagePerAgent", () => {
+    const messages: Message[] = [
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 1,
+        type: "code",
+        content: "Use React with TypeScript for the frontend.",
+        timestamp: new Date().toISOString(),
+      },
+      {
+        role: "reviewer",
+        agent: "codex",
+        turn: 2,
+        type: "review",
+        content: "I agree. React + TypeScript is the right choice.\n[CONVERGENCE: agree]",
+        convergenceSignal: "agree" as const,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 3,
+        type: "user-prompt" as const,
+        content: "[USER PROMPT #2]: now discuss the database",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+
+    const output = formatConsensus(messages, 2);
+    expect(output).toContain("React");
+    expect(output).not.toContain("USER PROMPT");
+  });
+});

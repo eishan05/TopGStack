@@ -32,9 +32,10 @@ function getSignalForMessage(msg: Message): ConvergenceSignal | null {
 }
 
 export function detectConvergence(messages: Message[]): boolean {
-  if (messages.length < 2) return false;
+  const agentMessages = messages.filter((m) => m.type !== "user-prompt");
+  if (agentMessages.length < 2) return false;
   const lastByAgent = new Map<string, Message>();
-  for (const msg of messages) {
+  for (const msg of agentMessages) {
     lastByAgent.set(msg.agent, msg);
   }
   if (lastByAgent.size < 2) return false;
@@ -43,8 +44,9 @@ export function detectConvergence(messages: Message[]): boolean {
 }
 
 export function checkDiffStability(messages: Message[]): boolean {
-  if (messages.length < 4) return false;
-  const recent = messages.slice(-4);
+  const agentMessages = messages.filter((m) => m.type !== "user-prompt");
+  if (agentMessages.length < 4) return false;
+  const recent = agentMessages.slice(-4);
   const contents = recent.map((m) =>
     m.content
       .replace(CONVERGENCE_TAG_RE, "")

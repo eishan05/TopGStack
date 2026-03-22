@@ -88,4 +88,27 @@ describe("SessionManager", () => {
   it("should throw when loading a nonexistent session", () => {
     expect(() => manager.load("nonexistent")).toThrow();
   });
+
+  it("should list all sessions", () => {
+    manager.create("First prompt", defaultConfig);
+    manager.create("Second prompt", defaultConfig);
+
+    const sessions = manager.listSessions();
+    expect(sessions).toHaveLength(2);
+    const prompts = sessions.map((s) => s.prompt);
+    expect(prompts).toContain("First prompt");
+    expect(prompts).toContain("Second prompt");
+  });
+
+  it("should return empty array when no sessions exist", () => {
+    const sessions = manager.listSessions();
+    expect(sessions).toHaveLength(0);
+  });
+
+  it("should update the prompt in session metadata", () => {
+    const session = manager.create("(interactive session)", defaultConfig);
+    manager.updatePrompt(session.sessionId, "Should we use React?");
+    const loaded = manager.load(session.sessionId);
+    expect(loaded.meta.prompt).toBe("Should we use React?");
+  });
 });

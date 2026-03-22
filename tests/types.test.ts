@@ -35,4 +35,16 @@ describe("types", () => {
     expect(meta.version).toBe(1);
     expect(meta.config.guardrailRounds).toBe(8);
   });
+
+  it("should allow user-prompt message type", () => {
+    const msg: Message = {
+      role: "initiator",
+      agent: "claude",
+      turn: 0,
+      type: "user-prompt",
+      content: "[USER PROMPT #1]: test",
+      timestamp: new Date().toISOString(),
+    };
+    expect(msg.type).toBe("user-prompt");
+  });
 });
