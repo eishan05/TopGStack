@@ -136,6 +136,55 @@ describe("Orchestrator", () => {
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
+
+  it("should re-throw abort instead of swallowing it during escalation", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "topg-orch-"));
+    const session = new SessionManager(tmpDir);
+
+    const claude: AgentAdapter = {
+      name: "claude",
+      send: vi.fn(async (_p, _c, signal?: AbortSignal) => {
+        if (signal?.aborted) throw new Error("aborted");
+        return { content: "Disagree.\n[CONVERGENCE: disagree]", convergenceSignal: "disagree" as const };
+      }),
+    };
+    const codex: AgentAdapter = {
+      name: "codex",
+      send: vi.fn(async (_p, _c, signal?: AbortSignal) => {
+        if (signal?.aborted) throw new Error("aborted");
+        return { content: "Disagree.\n[CONVERGENCE: disagree]", convergenceSignal: "disagree" as const };
+      }),
+    };
+
+    const config = { ...defaultConfig, guardrailRounds: 3 };
+    const orch = new Orchestrator(claude, codex, session, config);
+
+    // Abort right before escalation would fire
+    const controller = new AbortController();
+    // Let review loop complete, then abort
+    let callCount = 0;
+    const origClaudeSend = claude.send;
+    claude.send = vi.fn(async (p, c, s) => {
+      callCount++;
+      // Abort after review loop completes (3rd call is escalation for claude)
+      if (callCount >= 3) {
+        controller.abort();
+        throw new Error("aborted");
+      }
+      return origClaudeSend(p, c, s);
+    });
+    const origCodexSend = codex.send;
+    codex.send = vi.fn(async (p, c, s) => {
+      if (controller.signal.aborted) throw new Error("aborted");
+      return origCodexSend(p, c, s);
+    });
+
+    await expect(
+      orch.runWithHistory("Test", [], session.create("test", config).sessionId, controller.signal)
+    ).rejects.toThrow("aborted");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
 });
 
 describe("runWithHistory", () => {

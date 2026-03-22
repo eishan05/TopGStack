@@ -370,6 +370,15 @@ export class Orchestrator {
       this.agentB.send(prompt, ctx, signal),
     ]);
 
+    // If either call was aborted (user cancellation), re-throw immediately
+    // so the caller's abort handler runs instead of fabricating a summary.
+    const abortedResult = [resultA, resultB].find(
+      (r) => r.status === "rejected" && r.reason?.message === "aborted"
+    );
+    if (abortedResult) {
+      throw (abortedResult as PromiseRejectedResult).reason;
+    }
+
     const escResponseA = resultA.status === "fulfilled"
       ? resultA.value
       : { content: `[Escalation failed: ${resultA.reason?.message ?? "unknown error"}]` };
@@ -377,7 +386,7 @@ export class Orchestrator {
       ? resultB.value
       : { content: `[Escalation failed: ${resultB.reason?.message ?? "unknown error"}]` };
 
-    // If both failed, throw so the caller can handle it
+    // If both failed (non-abort), throw so the caller can handle it
     if (resultA.status === "rejected" && resultB.status === "rejected") {
       throw new Error(`Both escalation calls failed: ${resultA.reason?.message}; ${resultB.reason?.message}`);
     }
