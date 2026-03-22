@@ -1,0 +1,65 @@
+import type { Message, ConvergenceSignal } from "./types.js";
+
+const CONVERGENCE_TAG_RE = /\[CONVERGENCE:\s*(agree|disagree|partial|defer)\]/i;
+
+const AGREEMENT_PHRASES = [
+  "i agree",
+  "looks good",
+  "no further changes",
+  "no modifications needed",
+  "this is correct",
+  "no objections",
+  "lgtm",
+  "ship it",
+  "well done",
+  "this looks right",
+  "i'm satisfied",
+  "no issues found",
+];
+
+export function parseConvergenceTag(content: string): ConvergenceSignal | null {
+  const match = content.match(CONVERGENCE_TAG_RE);
+  return match ? (match[1].toLowerCase() as ConvergenceSignal) : null;
+}
+
+function getSignalForMessage(msg: Message): ConvergenceSignal | null {
+  if (msg.convergenceSignal) return msg.convergenceSignal;
+  const tagSignal = parseConvergenceTag(msg.content);
+  if (tagSignal) return tagSignal;
+  const lower = msg.content.toLowerCase();
+  const hasAgreement = AGREEMENT_PHRASES.some((phrase) => lower.includes(phrase));
+  return hasAgreement ? "agree" : null;
+}
+
+export function detectConvergence(messages: Message[]): boolean {
+  if (messages.length < 2) return false;
+  const lastByAgent = new Map<string, Message>();
+  for (const msg of messages) {
+    lastByAgent.set(msg.agent, msg);
+  }
+  if (lastByAgent.size < 2) return false;
+  const signals = [...lastByAgent.values()].map(getSignalForMessage);
+  return signals.every((s) => s === "agree");
+}
+
+export function checkDiffStability(messages: Message[]): boolean {
+  if (messages.length < 4) return false;
+  const recent = messages.slice(-4);
+  const contents = recent.map((m) =>
+    m.content
+      .replace(CONVERGENCE_TAG_RE, "")
+      .replace(/^(i agree|confirmed|yes|looks good)[.,!]?\s*/i, "")
+      .trim()
+      .toLowerCase()
+  );
+  const similarity = (a: string, b: string): number => {
+    if (a === b) return 1;
+    const longer = a.length > b.length ? a : b;
+    const shorter = a.length > b.length ? b : a;
+    if (longer.length === 0) return 1;
+    const words = shorter.split(/\s+/);
+    const matchedWords = words.filter((w) => longer.includes(w));
+    return matchedWords.length / words.length;
+  };
+  return similarity(contents[0], contents[2]) > 0.8 && similarity(contents[1], contents[3]) > 0.8;
+}

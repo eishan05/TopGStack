@@ -1,0 +1,86 @@
+import { describe, it, expect } from "vitest";
+import { formatConsensus, formatEscalation } from "../src/formatter.js";
+import type { Message, Artifact } from "../src/types.js";
+
+describe("formatConsensus", () => {
+  it("should format a consensus result", () => {
+    const messages: Message[] = [
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 1,
+        type: "code",
+        content: "Use React with TypeScript for the frontend.",
+        timestamp: new Date().toISOString(),
+      },
+      {
+        role: "reviewer",
+        agent: "codex",
+        turn: 2,
+        type: "review",
+        content: "I agree. React + TypeScript is the right choice.\n[CONVERGENCE: agree]",
+        convergenceSignal: "agree",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+
+    const output = formatConsensus(messages, 2);
+    expect(output).toContain("[CONSENSUS after 2 rounds]");
+    expect(output).toContain("React");
+  });
+
+  it("should include artifacts when present", () => {
+    const artifacts: Artifact[] = [{ path: "src/app.tsx", content: "export default App;", type: "code" }];
+    const messages: Message[] = [
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 1,
+        type: "code",
+        content: "Here is the app.",
+        artifacts,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        role: "reviewer",
+        agent: "codex",
+        turn: 2,
+        type: "consensus",
+        content: "LGTM.\n[CONVERGENCE: agree]",
+        convergenceSignal: "agree",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+
+    const output = formatConsensus(messages, 2);
+    expect(output).toContain("src/app.tsx");
+  });
+});
+
+describe("formatEscalation", () => {
+  it("should format a disagreement report", () => {
+    const messages: Message[] = [
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 7,
+        type: "deadlock",
+        content: "## What we agree on\n- Use TypeScript\n## Where we disagree\n- I prefer React\n## My recommendation\n- Use React",
+        timestamp: new Date().toISOString(),
+      },
+      {
+        role: "reviewer",
+        agent: "codex",
+        turn: 8,
+        type: "deadlock",
+        content: "## What we agree on\n- Use TypeScript\n## Where we disagree\n- I prefer Vue\n## My recommendation\n- Use Vue",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+
+    const output = formatEscalation(messages, 8);
+    expect(output).toContain("[ESCALATION after 8 rounds");
+    expect(output).toContain("Claude");
+    expect(output).toContain("Codex");
+  });
+});

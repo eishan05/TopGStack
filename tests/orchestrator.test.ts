@@ -1,0 +1,94 @@
+import { describe, it, expect, vi } from "vitest";
+import { Orchestrator } from "../src/orchestrator.js";
+import type { AgentAdapter } from "../src/adapters/agent-adapter.js";
+import type { AgentResponse, ConversationContext, OrchestratorConfig } from "../src/types.js";
+import { SessionManager } from "../src/session.js";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+
+function createMockAdapter(name: "claude" | "codex", responses: AgentResponse[]): AgentAdapter {
+  let callIndex = 0;
+  return {
+    name,
+    send: vi.fn(async (_prompt: string, _ctx: ConversationContext) => {
+      const response = responses[callIndex] ?? responses[responses.length - 1];
+      callIndex++;
+      return response;
+    }),
+  };
+}
+
+describe("Orchestrator", () => {
+  const defaultConfig: OrchestratorConfig = {
+    startWith: "claude",
+    workingDirectory: "/tmp",
+    guardrailRounds: 8,
+    timeoutMs: 120000,
+    outputFormat: "text",
+  };
+
+  it("should reach consensus in 2 rounds when both agree immediately", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "topg-orch-"));
+    const session = new SessionManager(tmpDir);
+
+    const claude = createMockAdapter("claude", [
+      { content: "Use React.\n[CONVERGENCE: agree]", convergenceSignal: "agree" },
+    ]);
+    const codex = createMockAdapter("codex", [
+      { content: "I agree, React is great.\n[CONVERGENCE: agree]", convergenceSignal: "agree" },
+    ]);
+
+    const orch = new Orchestrator(claude, codex, session, defaultConfig);
+    const result = await orch.run("What frontend framework?");
+
+    expect(result.type).toBe("consensus");
+    expect(result.rounds).toBeLessThanOrEqual(2);
+    expect(result.messages.length).toBeGreaterThanOrEqual(2);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("should escalate after guardrail rounds when agents disagree", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "topg-orch-"));
+    const session = new SessionManager(tmpDir);
+
+    const claude = createMockAdapter("claude", [
+      { content: "Use React.\n[CONVERGENCE: disagree]", convergenceSignal: "disagree" },
+    ]);
+    const codex = createMockAdapter("codex", [
+      { content: "Use Vue.\n[CONVERGENCE: disagree]", convergenceSignal: "disagree" },
+    ]);
+
+    const config = { ...defaultConfig, guardrailRounds: 3 };
+    const orch = new Orchestrator(claude, codex, session, config);
+    const result = await orch.run("What frontend framework?");
+
+    expect(result.type).toBe("escalation");
+    expect(result.rounds).toBe(3);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("should converge mid-loop when agents reach agreement", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "topg-orch-"));
+    const session = new SessionManager(tmpDir);
+
+    const claude = createMockAdapter("claude", [
+      { content: "Use React.\n[CONVERGENCE: partial]", convergenceSignal: "partial" },
+      { content: "OK, React with Next.js.\n[CONVERGENCE: agree]", convergenceSignal: "agree" },
+    ]);
+    const codex = createMockAdapter("codex", [
+      { content: "React is fine but add Next.js.\n[CONVERGENCE: partial]", convergenceSignal: "partial" },
+      { content: "Agreed, React + Next.js.\n[CONVERGENCE: agree]", convergenceSignal: "agree" },
+    ]);
+
+    const orch = new Orchestrator(claude, codex, session, defaultConfig);
+    const result = await orch.run("What frontend framework?");
+
+    expect(result.type).toBe("consensus");
+    expect(result.rounds).toBeGreaterThan(2);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});

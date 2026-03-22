@@ -1,0 +1,66 @@
+import { spawn } from "node:child_process";
+import { parseConvergenceTag } from "../convergence.js";
+import type { AgentName, AgentResponse, ConversationContext } from "../types.js";
+import type { AgentAdapter } from "./agent-adapter.js";
+
+export class ClaudeAdapter implements AgentAdapter {
+  name: AgentName = "claude";
+  private timeoutMs: number;
+
+  constructor(timeoutMs = 120_000) {
+    this.timeoutMs = timeoutMs;
+  }
+
+  async send(prompt: string, context: ConversationContext): Promise<AgentResponse> {
+    const fullPrompt = context.systemPrompt + "\n\n" + prompt;
+
+    return new Promise((resolve, reject) => {
+      const proc = spawn("claude", ["-p", "--output-format", "json"], {
+        cwd: context.workingDirectory,
+        env: { ...process.env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      const timeout = setTimeout(() => {
+        proc.kill("SIGTERM");
+        reject(new Error(`Claude adapter timed out after ${this.timeoutMs}ms`));
+      }, this.timeoutMs);
+
+      proc.on("close", (code) => {
+        clearTimeout(timeout);
+        if (code !== 0) {
+          reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout);
+          const content = parsed.result ?? parsed.content ?? stdout;
+          const signal = parseConvergenceTag(content);
+          resolve({
+            content,
+            convergenceSignal: signal ?? undefined,
+          });
+        } catch {
+          const signal = parseConvergenceTag(stdout);
+          resolve({
+            content: stdout,
+            convergenceSignal: signal ?? undefined,
+          });
+        }
+      });
+
+      proc.stdin?.write(fullPrompt);
+      proc.stdin?.end();
+    });
+  }
+}
