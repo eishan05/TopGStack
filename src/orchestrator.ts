@@ -428,7 +428,7 @@ export class Orchestrator {
     agent: AgentName,
     turn: number,
     type: Message["type"],
-    response: { content: string; artifacts?: any[]; convergenceSignal?: any }
+    response: { content: string; artifacts?: any[]; toolActivities?: any[]; convergenceSignal?: any }
   ): Message {
     return {
       role,
@@ -437,6 +437,7 @@ export class Orchestrator {
       type,
       content: response.content,
       artifacts: response.artifacts,
+      toolActivities: response.toolActivities,
       convergenceSignal: response.convergenceSignal,
       timestamp: new Date().toISOString(),
     };
