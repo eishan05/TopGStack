@@ -53,6 +53,13 @@ interface Artifact {
   type: "code" | "diff" | "config";
 }
 
+interface ConversationContext {
+  sessionId: string;
+  history: Message[];       // all prior turns
+  workingDirectory: string;
+  systemPrompt: string;     // role-specific instructions for this turn
+}
+
 interface AgentAdapter {
   name: string;
   send(prompt: string, context: ConversationContext): Promise<AgentResponse>;
@@ -60,7 +67,7 @@ interface AgentAdapter {
 ```
 
 **ClaudeAdapter:**
-- Spawns `claude -p <prompt> --output-format stream-json`
+- Spawns `claude -p --output-format stream-json` with prompt and context passed via **stdin** (avoids OS argument length limits for long conversations)
 - Parses streaming JSON responses
 - Supports passing conversation context and working directory
 
@@ -118,7 +125,7 @@ interface Message {
 
 3. **Rebuttal/revision** — Agent A gets B's review and either revises or argues their position.
 
-4. **Loop** — Steps 2-3 repeat, alternating roles each cycle so neither agent is permanently the reviewer.
+4. **Loop** — Steps 2-3 repeat. The `role` field in each `Message` describes the function for that specific turn (initiator vs reviewer), not a fixed identity — the `agent` field captures which agent it is. In even-numbered cycles, roles swap so neither agent is permanently the reviewer.
 
 ### Convergence Detection
 
@@ -207,6 +214,20 @@ topg <prompt>
   - `child_process` (Node built-in) — Claude Code CLI spawning
   - `commander` or `yargs` — CLI argument parsing
   - `nanoid` — Session ID generation
+
+## Credentials
+
+- **Claude Code:** Requires `ANTHROPIC_API_KEY` environment variable (or an active `claude` login session)
+- **Codex SDK:** Requires `OPENAI_API_KEY` environment variable
+- At startup, the orchestrator validates both credentials are present and fails fast with a clear error if not
+
+## Failure Modes and Recovery
+
+- **Agent process crash / timeout:** Each `send()` call has a configurable timeout (default 120s). On timeout or crash, the orchestrator retries once. If the retry fails, the session is paused with state persisted — the user can `--resume` later.
+- **Rate limiting (429) / server errors (5xx):** Exponential backoff with 3 retries, then pause the session.
+- **Malformed response (missing convergence tag):** Fall back to phrase-based detection. If no signal can be extracted, assume `partial` and continue.
+- **Context window overflow:** When cumulative transcript exceeds 80% of an agent's context window, earlier turns are summarized into a condensed recap before sending. The full transcript is always preserved in the session files.
+- **Session file corruption:** The `meta.json` includes a `version` field (starting at `1`) for forward-compatible migration. JSONL transcript is append-only — partial corruption only loses the last incomplete line.
 
 ## Non-Goals
 
