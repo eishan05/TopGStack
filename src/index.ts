@@ -28,7 +28,7 @@ program
   .argument("[prompt]", "The prompt or question to collaborate on")
   .option("--start-with <agent>", "Which agent goes first (claude or codex)", "claude")
   .option("--cwd <path>", "Working directory for agents", process.cwd())
-  .option("--guardrail <rounds>", "Soft escalation after N rounds", "8")
+  .option("--guardrail <rounds>", "Soft escalation after N rounds", "5")
   .option("--timeout <seconds>", "Timeout per agent turn in seconds", "900")
   .option("--output <format>", "Output format (text or json)", "text")
   .option("--transcript <path>", "Save full transcript to path")

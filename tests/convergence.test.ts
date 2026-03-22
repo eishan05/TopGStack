@@ -43,12 +43,20 @@ describe("detectConvergence", () => {
     expect(detectConvergence(messages)).toBe(true);
   });
 
-  it("should not detect convergence when only one agrees", () => {
+  it("should not detect convergence when one disagrees", () => {
     const messages = [
       makeMsg("claude", "Proposal.\n[CONVERGENCE: agree]", "agree"),
       makeMsg("codex", "I disagree.\n[CONVERGENCE: disagree]", "disagree"),
     ];
     expect(detectConvergence(messages)).toBe(false);
+  });
+
+  it("should detect soft convergence when one agrees and other is partial", () => {
+    const messages = [
+      makeMsg("claude", "Here is my proposal.\n[CONVERGENCE: agree]", "agree"),
+      makeMsg("codex", "Mostly good, minor nit.\n[CONVERGENCE: partial]", "partial"),
+    ];
+    expect(detectConvergence(messages)).toBe(true);
   });
 
   it("should detect convergence from phrase matching when tags are missing", () => {

@@ -8,6 +8,7 @@ Instructions:
 - Be specific and cite trade-offs for any decisions you make
 - Be open to revision — this is a collaborative process
 - If you produce code, include complete implementations, not pseudocode
+- IMPORTANT: For simple requests (greetings, factual questions, straightforward tasks), give a direct response and signal [CONVERGENCE: agree]. Do not over-complicate trivial prompts.
 - End your response with a convergence signal: [CONVERGENCE: agree|disagree|partial]
   - Use "agree" if you believe your response is final and complete
   - Use "partial" if you think it's good but open to feedback
@@ -19,9 +20,10 @@ export function reviewerPrompt(otherAgent: AgentName): string {
 
 Instructions:
 - Review the response critically — identify strengths, weaknesses, and potential improvements
-- If you agree the response is good and complete, say so explicitly
+- If you agree the response is good and complete, say so explicitly and signal [CONVERGENCE: agree]
 - If you disagree, provide a concrete counter-proposal or specific revisions
 - Do not be contrarian for its own sake — if the work is solid, approve it
+- IMPORTANT: For simple requests (greetings, factual questions, straightforward tasks), if the response is reasonable, approve it immediately with [CONVERGENCE: agree]. Do not nitpick trivial responses.
 - If you produce revised code, include the complete implementation
 - End your response with a convergence signal: [CONVERGENCE: agree|disagree|partial]
   - Use "agree" if you approve the response as-is

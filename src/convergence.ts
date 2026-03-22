@@ -15,6 +15,31 @@ const AGREEMENT_PHRASES = [
   "this looks right",
   "i'm satisfied",
   "no issues found",
+  "approved",
+  "nothing to add",
+  "no concerns",
+  "this is fine",
+  "perfectly fine",
+  "solid response",
+  "approve the response",
+  "approve this",
+  "good as-is",
+  "good as is",
+  "no changes needed",
+  "response is complete",
+  "nothing to change",
+  "well stated",
+];
+
+const DISAGREEMENT_PHRASES = [
+  "i disagree",
+  "should instead",
+  "better approach",
+  "fundamentally different",
+  "major concern",
+  "significant issue",
+  "needs rework",
+  "counter-proposal",
 ];
 
 export function parseConvergenceTag(content: string): ConvergenceSignal | null {
@@ -28,7 +53,10 @@ function getSignalForMessage(msg: Message): ConvergenceSignal | null {
   if (tagSignal) return tagSignal;
   const lower = msg.content.toLowerCase();
   const hasAgreement = AGREEMENT_PHRASES.some((phrase) => lower.includes(phrase));
-  return hasAgreement ? "agree" : null;
+  if (hasAgreement) return "agree";
+  const hasDisagreement = DISAGREEMENT_PHRASES.some((phrase) => lower.includes(phrase));
+  if (hasDisagreement) return "disagree";
+  return null;
 }
 
 export function detectConvergence(messages: Message[]): boolean {
@@ -40,7 +68,20 @@ export function detectConvergence(messages: Message[]): boolean {
   }
   if (lastByAgent.size < 2) return false;
   const signals = [...lastByAgent.values()].map(getSignalForMessage);
-  return signals.every((s) => s === "agree");
+
+  // Strong consensus: both agree
+  if (signals.every((s) => s === "agree")) return true;
+
+  // Soft consensus: one agrees and the other is partial (not disagree)
+  // This prevents endless rounds when agents mostly agree but one hedges
+  if (
+    signals.includes("agree") &&
+    signals.every((s) => s === "agree" || s === "partial")
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 export function checkDiffStability(messages: Message[]): boolean {

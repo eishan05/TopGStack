@@ -28,7 +28,7 @@ describe("Full collaboration loop", () => {
     outputFormat: "text",
   };
 
-  it("should run a full debate that converges after 4 turns", async () => {
+  it("should run a full debate that converges via soft consensus (agree + partial)", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "topg-int-"));
     const session = new SessionManager(tmpDir);
 
@@ -45,10 +45,11 @@ describe("Full collaboration loop", () => {
     const orch = new Orchestrator(claude, codex, session, config);
     const result = await orch.run("Design the API layer");
 
+    // Soft convergence: Claude agrees at turn 3 while Codex's last was partial → converges early
     expect(result.type).toBe("consensus");
-    expect(result.rounds).toBe(4);
+    expect(result.rounds).toBe(3);
     expect(result.summary).toContain("[CONSENSUS");
-    expect(result.messages).toHaveLength(4);
+    expect(result.messages).toHaveLength(3);
 
     // Verify session files were created
     const dirs = fs.readdirSync(tmpDir);
