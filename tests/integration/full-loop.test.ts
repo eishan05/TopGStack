@@ -59,7 +59,7 @@ describe("Full collaboration loop", () => {
     // Summary comes from synthesis step — contains the actual deliverable
     expect(result.summary).toContain("REST API");
     expect(result.summary).toContain("Zod");
-    expect(result.messages).toHaveLength(3);
+    expect(result.messages).toHaveLength(4); // 3 debate turns + 1 consensus synthesis
 
     // Verify session files were created
     const dirs = fs.readdirSync(tmpDir);
