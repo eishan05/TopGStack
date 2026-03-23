@@ -1,6 +1,9 @@
-# TOPG
+<p align="center">
+  <img src="logo.svg" alt="TOPG" width="280"/>
+</p>
 
-### The Top G of AI Agent Frameworks
+<h1 align="center">TOPG</h1>
+<h3 align="center">The Top G of AI Agent Frameworks</h3>
 
 Listen. Most developers out there are using ONE AI model like broke people driving a single Honda Civic. They ask Claude a question. They get ONE answer. They accept it like sheep. They never question it. They never challenge it. They live in the matrix.
 
@@ -180,6 +183,20 @@ topg sessions clear --status escalated
 
 ---
 
+## The Mentality
+
+Most people use AI like consumers. They ask a question, they get an answer, they go home. They never think "what if this answer is wrong?" They never stress-test. They never challenge.
+
+TOPG is for builders who understand that **the best solutions survive criticism**. If your architecture can't withstand scrutiny from a second AI model, it sure as hell won't survive production.
+
+Stop being a one-model developer. **Escape the matrix.**
+
+```bash
+topg "your hardest problem here"
+```
+
+---
+
 ## The Tech Stack
 
 | Component | Choice |
@@ -221,20 +238,6 @@ npm test
 ```
 
 Tests exist because even the Top G verifies before he ships.
-
----
-
-## The Mentality
-
-Most people use AI like consumers. They ask a question, they get an answer, they go home. They never think "what if this answer is wrong?" They never stress-test. They never challenge.
-
-TOPG is for builders who understand that **the best solutions survive criticism**. If your architecture can't withstand scrutiny from a second AI model, it sure as hell won't survive production.
-
-Stop being a one-model developer. **Escape the matrix.**
-
-```bash
-topg "your hardest problem here"
-```
 
 ---
 
