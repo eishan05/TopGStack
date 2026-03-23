@@ -74,6 +74,16 @@ TOPG makes your subscriptions WORK FOR YOU. While you sleep, while you think, wh
 
 > "What color is your Bugatti?" Irrelevant. What matters is: are your AI models fighting for you, or are they sitting idle like expensive furniture?
 
+### Claude Code Skill
+
+Tell Claude Code:
+
+```
+Install the topg-debate skill from https://github.com/eishan05/topgstack
+```
+
+Now `/topg-debate` works in any session. Both models fight without you leaving the terminal.
+
 ---
 
 ## Usage
