@@ -17,7 +17,8 @@ export class ClaudeAdapter implements AgentAdapter {
     const fullPrompt = prompt;
 
     return new Promise((resolve, reject) => {
-      const args = ["-p", fullPrompt, "--output-format", "stream-json"];
+      // --verbose is required when using --output-format stream-json with -p
+      const args = ["-p", fullPrompt, "--output-format", "stream-json", "--verbose"];
       if (this.yolo) {
         args.push("--dangerously-skip-permissions");
       }
@@ -32,6 +33,10 @@ export class ClaudeAdapter implements AgentAdapter {
       let fullContent = "";
       let resultContent: string | null = null;
       let lineBuffer = "";
+      // Track how much text we've already emitted as chunks so we can compute deltas.
+      // The CLI emits cumulative "assistant" events (not incremental deltas), so we
+      // diff against the previous snapshot to determine new text.
+      let emittedLen = 0;
 
       proc.stdout?.on("data", (chunk: Buffer) => {
         lineBuffer += chunk.toString();
@@ -46,10 +51,24 @@ export class ClaudeAdapter implements AgentAdapter {
           try {
             const event = JSON.parse(line);
 
-            if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
-              const text = event.delta.text;
-              fullContent += text;
-              onChunk?.(text);
+            // The CLI emits "assistant" events containing cumulative message content.
+            // Each event's message.content is an array of blocks; we extract text blocks.
+            if (event.type === "assistant") {
+              const contentBlocks = event.message?.content;
+              if (Array.isArray(contentBlocks)) {
+                let text = "";
+                for (const block of contentBlocks) {
+                  if (block.type === "text") {
+                    text += block.text;
+                  }
+                }
+                if (text.length > emittedLen) {
+                  const delta = text.slice(emittedLen);
+                  emittedLen = text.length;
+                  fullContent = text;
+                  onChunk?.(delta);
+                }
+              }
             } else if (event.type === "result") {
               resultContent = event.result ?? null;
             }
@@ -95,16 +114,29 @@ export class ClaudeAdapter implements AgentAdapter {
         if (remaining) {
           try {
             const event = JSON.parse(remaining);
-            if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
-              fullContent += event.delta.text;
-              onChunk?.(event.delta.text);
+            if (event.type === "assistant") {
+              const contentBlocks = event.message?.content;
+              if (Array.isArray(contentBlocks)) {
+                let text = "";
+                for (const block of contentBlocks) {
+                  if (block.type === "text") {
+                    text += block.text;
+                  }
+                }
+                if (text.length > emittedLen) {
+                  const delta = text.slice(emittedLen);
+                  emittedLen = text.length;
+                  fullContent = text;
+                  onChunk?.(delta);
+                }
+              }
             } else if (event.type === "result") {
               resultContent = event.result ?? null;
             }
           } catch { /* ignore malformed trailing data */ }
         }
 
-        // Prefer the result event's content (authoritative), fall back to accumulated deltas
+        // Prefer the result event's content (authoritative), fall back to accumulated text
         const content = resultContent ?? fullContent;
         const convergenceSignal = parseConvergenceTag(content);
         resolve({

@@ -13,12 +13,10 @@
     currentMeta: null,     // SessionMeta
     ws: null,              // WebSocket
     reconnectDelay: 1000,
-    streamingContent: "",  // accumulated raw text for the current streaming turn
-    streamingEl: null,     // DOM element for the in-progress streaming message
-    streamingAgent: null,  // agent name for the current streaming turn
-    streamingTurn: null,   // turn number for the current streaming message
-    streamingRole: null,   // role for the current streaming message
-    streamingRAF: null,    // requestAnimationFrame handle for throttled DOM updates
+    // Per-agent streaming state to support concurrent turns (e.g. escalation).
+    // Keyed by agent name ("claude" | "codex"), each entry holds its own content,
+    // DOM element, turn/role metadata, and rAF handle.
+    streams: {},           // { [agent]: { content, el, turn, role, raf } }
   };
 
   // ── DOM refs ───────────────────────────────────────────────────────
@@ -196,12 +194,15 @@
   function handleTurnStart(msg) {
     if (msg.sessionId !== state.currentSessionId) return;
 
-    // Reset streaming state for the new turn
-    state.streamingContent = "";
-    state.streamingEl = null;
-    state.streamingAgent = msg.agent;
-    state.streamingTurn = msg.turn;
-    state.streamingRole = msg.role;
+    // Initialise per-agent streaming state for this turn.
+    // During escalation both agents stream concurrently, so each gets its own slot.
+    state.streams[msg.agent] = {
+      content: "",
+      el: null,
+      turn: msg.turn,
+      role: msg.role,
+      raf: null,
+    };
 
     var indicator = $id("typing-indicator");
     var label = $id("typing-label");
@@ -215,7 +216,10 @@
   function handleTurnChunk(msg) {
     if (msg.sessionId !== state.currentSessionId) return;
 
-    state.streamingContent += msg.content;
+    var s = state.streams[msg.agent];
+    if (!s) return; // no turn.start received yet — ignore stale chunk
+
+    s.content += msg.content;
 
     // Hide the typing indicator once content starts arriving
     var indicator = $id("typing-indicator");
@@ -223,35 +227,40 @@
 
     // Throttle DOM updates with requestAnimationFrame to prevent layout thrashing
     // when chunks arrive faster than the browser can paint.
-    if (!state.streamingRAF) {
-      state.streamingRAF = requestAnimationFrame(function () {
-        state.streamingRAF = null;
-        flushStreamingDOM();
+    if (!s.raf) {
+      var agent = msg.agent;
+      s.raf = requestAnimationFrame(function () {
+        var stream = state.streams[agent];
+        if (stream) stream.raf = null;
+        flushStreamingDOM(agent);
       });
     }
   }
 
-  function flushStreamingDOM() {
+  function flushStreamingDOM(agent) {
+    var s = state.streams[agent];
+    if (!s) return;
+
     var thread = $id("thread");
     if (!thread) return;
 
     // Create the streaming message element on first flush
-    if (!state.streamingEl) {
-      state.streamingEl = renderMessage({
-        agent: state.streamingAgent,
-        role: state.streamingRole || "initiator",
-        turn: state.streamingTurn || 0,
-        content: state.streamingContent,
+    if (!s.el) {
+      s.el = renderMessage({
+        agent: agent,
+        role: s.role || "initiator",
+        turn: s.turn || 0,
+        content: s.content,
       });
-      state.streamingEl.classList.add("streaming");
-      thread.appendChild(state.streamingEl);
+      s.el.classList.add("streaming");
+      thread.appendChild(s.el);
     } else {
       // Update the content area of the existing streaming element.
       // Safe to use innerHTML: parseContent() calls escapeHtml() before any
       // HTML construction, so model output cannot inject scripts or tags.
-      var contentEl = state.streamingEl.querySelector(".message-content");
+      var contentEl = s.el.querySelector(".message-content");
       if (contentEl) {
-        contentEl.innerHTML = parseContent(state.streamingContent);
+        contentEl.innerHTML = parseContent(s.content);
       }
     }
 
@@ -270,18 +279,26 @@
     if (message) {
       state.currentMessages.push(message);
       var thread = $id("thread");
+      var agentKey = message.agent;
+      var s = state.streams[agentKey];
+
       if (thread) {
         // Replace the streaming placeholder with the final message
-        if (state.streamingEl && state.streamingEl.parentNode === thread) {
+        if (s && s.el && s.el.parentNode === thread) {
           var finalEl = renderMessage(message);
-          thread.replaceChild(finalEl, state.streamingEl);
+          thread.replaceChild(finalEl, s.el);
         } else {
           thread.appendChild(renderMessage(message));
         }
         thread.scrollTop = thread.scrollHeight;
       }
 
-      clearStreamingState();
+      // Clean up this agent's streaming state
+      if (s) {
+        if (s.raf) cancelAnimationFrame(s.raf);
+        delete state.streams[agentKey];
+      }
+
       updateConvergenceBar();
     }
   }
@@ -401,15 +418,12 @@
   // ── Select Session ─────────────────────────────────────────────────
 
   function clearStreamingState() {
-    state.streamingContent = "";
-    state.streamingEl = null;
-    state.streamingAgent = null;
-    state.streamingTurn = null;
-    state.streamingRole = null;
-    if (state.streamingRAF) {
-      cancelAnimationFrame(state.streamingRAF);
-      state.streamingRAF = null;
+    var agents = Object.keys(state.streams);
+    for (var i = 0; i < agents.length; i++) {
+      var s = state.streams[agents[i]];
+      if (s && s.raf) cancelAnimationFrame(s.raf);
     }
+    state.streams = {};
   }
 
   function selectSession(sessionId) {
