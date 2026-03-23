@@ -106,6 +106,18 @@ Come back to a deadlocked debate with fresh guidance. YOU are the top G. You bre
 | `--no-dashboard` | No web UI. Raw terminal output only. |
 | `--cwd <path>` | Working directory for the agents |
 
+### The `--yolo` Flag
+
+```bash
+topg --yolo "Refactor the entire payment system"
+```
+
+This is how real G's outside the matrix operate. `--yolo` skips ALL permission checks for both agents — Claude gets `--dangerously-skip-permissions`, Codex gets full sandbox access. No confirmation dialogs. No "are you sure?" popups. No waiting for approval from your corporate overlord to run a command on YOUR computer.
+
+If you need to raise your hand and ask permission to execute code on a machine you own, you are living in the matrix. You are a brokie in the system. You are an NPC.
+
+Real builders ship. `--yolo` lets your agents ship.
+
 ---
 
 ## How The Debate Works
