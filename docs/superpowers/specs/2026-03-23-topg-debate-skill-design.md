@@ -61,8 +61,9 @@ rm -rf /tmp/topgstack-install
 ### Step 3: Verify prerequisites
 
 - `topg --help` succeeds
-- `OPENAI_API_KEY` is set (required for Codex agent) — warn if missing
+- `OPENAI_API_KEY` is set (required for Codex agent) — warn and abort if missing
 - `claude` CLI is available (required for Claude agent) — should always be true in Claude Code context
+- `ANTHROPIC_API_KEY` is **not** required when invoked from within Claude Code — the invoking agent's session handles Claude auth. topg may emit a warning about it; the skill should ignore this warning.
 
 If install fails, surface the error to the user with instructions rather than silently continuing.
 
@@ -122,6 +123,9 @@ topg "<framed prompt>" \
   --output json \
   --yolo \
   --cwd "$(pwd)" \
+  --no-dashboard \
+  --guardrail 3 \
+  --timeout 300 \
   [additional flags from config]
 ```
 
@@ -129,20 +133,44 @@ While the debate runs, inform the user: "Debate in progress between Claude and C
 
 The debate runs synchronously — the skill waits for the full result before continuing.
 
+**Timeout considerations:** A debate with the default 5 rounds and 15-min timeout could run over 2 hours. Since the invoking Claude Code session is blocked waiting, the skill uses tighter defaults for skill-mode: `--guardrail 3` (3 rounds) and `--timeout 300` (5 min per turn). This caps typical debates at ~30 minutes. The invoking agent can override these if it determines the problem warrants longer deliberation. If the Bash command is interrupted (e.g., user cancels), the topg session auto-pauses and can be resumed later.
+
 ### Phase 3: Parse Result
 
-The JSON output from topg contains:
+The JSON output from topg follows the `OrchestratorResult` interface (see `src/types.ts`):
 
 ```typescript
+// Top-level result
 {
   type: "consensus" | "escalation";
   sessionId: string;
   rounds: number;
-  summary: string;       // Formatted markdown
-  messages: Message[];   // Full turn history
-  artifacts?: Artifact[]; // Generated code/files
+  summary: string;         // Formatted markdown — the main output to surface
+  messages: Message[];     // Full turn-by-turn history
+  artifacts?: Artifact[];  // Generated code/files from the final consensus
+}
+
+// Each message in the history
+interface Message {
+  role: "initiator" | "reviewer";
+  agent: "claude" | "codex";
+  turn: number;
+  type: "code" | "review" | "debate" | "consensus" | "deadlock" | "user-prompt" | "user-guidance";
+  content: string;
+  artifacts?: Artifact[];
+  toolActivities?: ToolActivity[];    // Commands run, files changed by agent
+  convergenceSignal?: "agree" | "disagree" | "partial" | "defer";
+  timestamp: string;
 }
 ```
+
+**Key fields the skill should extract:**
+- `summary` — the primary output to present to the user and fold into reasoning
+- `type` — determines consensus vs. escalation handling
+- `sessionId` — needed for resume capability
+- `artifacts` — suggested code/files to present
+- `messages[].convergenceSignal` — useful for gauging confidence (both "agree" = high confidence)
+- `messages[].toolActivities` — shows what the agents actually did (ran commands, changed files)
 
 ### Phase 4: Fold Into Reasoning
 
@@ -175,16 +203,16 @@ The skill tracks the `sessionId` from each debate dispatch. This enables:
 When a debate escalates and the user provides direction:
 
 ```bash
-topg --resume <sessionId> "<user guidance>" --output json --yolo
+topg --resume <sessionId> "<user guidance>" --output json --yolo --no-dashboard
 ```
 
-The resumed debate includes the user's guidance as additional context. The agents continue from where they left off with the new constraint. The skill parses the new result identically to the initial dispatch.
+Here `<user guidance>` is the positional `[prompt]` argument — not a flag value. The `--resume <sessionId>` flag loads the paused session, and the positional prompt provides guidance for the next round. This always runs in one-shot mode (not REPL). The skill parses the new result identically to the initial dispatch.
 
 ### Session Lifecycle Commands
 
 The skill can manage sessions on behalf of the user:
 
-- **List sessions:** Parse output from topg's session listing to show active/paused/completed debates
+- **List sessions:** Read the session directory at `~/.topg/sessions/` and parse `meta.json` files to list active/paused/completed debates. (Note: there is no `topg list` CLI command — the skill reads the filesystem directly.)
 - **Clean up:** `topg clear --completed --older-than 7d` to prune old sessions
 - **Delete specific:** `topg delete <sessionId>` for targeted cleanup
 
@@ -192,9 +220,10 @@ The skill can manage sessions on behalf of the user:
 
 For complex problems that spawn multiple debates:
 
-- Track all sessionIds within the conversation
+- Track all sessionIds within the conversation context window (the skill has no file-based persistence between invocations — it relies on the LLM's conversation context to remember prior debate outcomes)
 - When framing a new debate question, reference relevant prior debate outcomes
 - Example: "In a previous debate (session abc123), we agreed on PostgreSQL for caching. Now we need to decide on the cache invalidation strategy."
+- Optionally use `--transcript <path>` to save debate transcripts to files for later reference in multi-debate workflows
 
 ## Configuration
 
@@ -205,8 +234,8 @@ For complex problems that spawn multiple debates:
 | `--yolo` | **ON** | Skip permission checks — that's the way |
 | `--output` | `json` | Machine-parseable for agent consumption |
 | `--start-with` | `claude` | Claude leads, Codex reviews |
-| `--guardrail` | `5` | 5 rounds before escalation |
-| `--timeout` | `900` | 15 min per agent turn |
+| `--guardrail` | `3` | 3 rounds before escalation (tighter for skill-mode; override to 5-8 for complex debates) |
+| `--timeout` | `300` | 5 min per agent turn in seconds (tighter for skill-mode; override to 900 for deep problems) |
 | `--codex-sandbox` | `workspace-write` | Codex can write to project files |
 | `--codex-web-search` | `live` | Full web search enabled |
 | `--codex-network` | `true` | Network access enabled |
@@ -266,8 +295,8 @@ Full flag reference with scenario-based recommendations:
 | `OPENAI_API_KEY` not set | Warn user, suggest setting it, abort |
 | topg times out (>15 min per turn) | Report timeout, offer to resume with tighter constraints |
 | topg crashes mid-debate | Report error, session auto-paused, offer resume |
-| JSON parse failure | Fall back to text output mode, re-run with `--output text` |
-| All agents agree immediately (1 round) | Present result but flag low-confidence — may indicate the question was too simple for debate |
+| JSON parse failure | Report the raw output to the user and abort structured processing. Do not attempt to re-run with `--output text` — the text format lacks structured fields needed for session resume and multi-debate tracking. |
+| Rapid consensus (2 turns — 1 initiator + 1 reviewer) | Present result but note to user that both agents agreed immediately — may indicate the question was too straightforward for debate, or that the answer is genuinely obvious |
 
 ## Non-Goals
 
