@@ -7,8 +7,11 @@ export function formatConsensus(messages: Message[], rounds: number): string {
   let output = `[CONSENSUS after ${rounds} rounds]\n\n`;
   output += `## Agreed Approach\n\n`;
 
-  const agentMessages = messages.filter((m) => m.type !== "user-prompt");
-  const finalMsg = agentMessages[agentMessages.length - 1];
+  const agentMessages = messages.filter((m) => m.type !== "user-prompt" && m.type !== "user-guidance");
+  // Prefer the initiator's last substantive message over a reviewer's meta-review.
+  // The initiator typically has the actual deliverable content while the reviewer
+  // often just comments on it (e.g. "Your plan is solid...").
+  const finalMsg = findBestConsensusMessage(agentMessages) ?? agentMessages[agentMessages.length - 1];
   output += finalMsg.content.replace(/\[CONVERGENCE:.*?\]/gi, "").trim();
   output += "\n\n";
 
@@ -53,6 +56,30 @@ export function formatEscalation(messages: Message[], rounds: number): string {
   }
 
   return output;
+}
+
+/**
+ * Find the best message to use as the consensus output.
+ * Prefers the last initiator message over the last reviewer message,
+ * since reviewers tend to produce meta-commentary ("Your plan is solid...")
+ * rather than the actual deliverable.
+ */
+function findBestConsensusMessage(agentMessages: Message[]): Message | null {
+  if (agentMessages.length === 0) return null;
+
+  // If the last message is from the initiator, use it directly
+  const last = agentMessages[agentMessages.length - 1];
+  if (last.role === "initiator") return last;
+
+  // Otherwise, find the last initiator message
+  for (let i = agentMessages.length - 1; i >= 0; i--) {
+    if (agentMessages[i].role === "initiator") {
+      return agentMessages[i];
+    }
+  }
+
+  // Fallback to the last message if no initiator found
+  return last;
 }
 
 function getLastMessagePerAgent(messages: Message[]): Message[] {

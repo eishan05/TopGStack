@@ -145,6 +145,71 @@ describe("formatConsensus with tool activities", () => {
   });
 });
 
+describe("formatConsensus prefers initiator message", () => {
+  it("should use initiator message instead of reviewer meta-review", () => {
+    const messages: Message[] = [
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 1,
+        type: "code",
+        content: "## Implementation Plan\n\n1. Set up React project\n2. Add TypeScript\n3. Configure routing",
+        timestamp: new Date().toISOString(),
+      },
+      {
+        role: "reviewer",
+        agent: "codex",
+        turn: 2,
+        type: "review",
+        content: "Your plan is solid. I verified every major claim and found no issues.\n[CONVERGENCE: agree]",
+        convergenceSignal: "agree",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+
+    const output = formatConsensus(messages, 2);
+    // The "Agreed Approach" section should contain the actual plan from the initiator
+    const agreedSection = output.split("## Key Decisions")[0];
+    expect(agreedSection).toContain("## Implementation Plan");
+    expect(agreedSection).toContain("Set up React project");
+    expect(agreedSection).not.toContain("Your plan is solid");
+  });
+
+  it("should use last message when it is from the initiator", () => {
+    const messages: Message[] = [
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 1,
+        type: "code",
+        content: "Use React.",
+        timestamp: new Date().toISOString(),
+      },
+      {
+        role: "reviewer",
+        agent: "codex",
+        turn: 2,
+        type: "review",
+        content: "Use React with Next.js.\n[CONVERGENCE: partial]",
+        convergenceSignal: "partial",
+        timestamp: new Date().toISOString(),
+      },
+      {
+        role: "initiator",
+        agent: "claude",
+        turn: 3,
+        type: "code",
+        content: "Agreed. Use React with Next.js for SSR.\n[CONVERGENCE: agree]",
+        convergenceSignal: "agree",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+
+    const output = formatConsensus(messages, 3);
+    expect(output).toContain("React with Next.js for SSR");
+  });
+});
+
 describe("formatter with user-prompt filtering", () => {
   it("should ignore user-prompt messages in getLastMessagePerAgent", () => {
     const messages: Message[] = [
