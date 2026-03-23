@@ -26,6 +26,18 @@ export function parseCommand(input: string): ParsedCommand | null {
   };
 }
 
+function isUserInputMessage(message: Message): boolean {
+  return message.type === "user-prompt" || message.type === "user-guidance";
+}
+
+export function selectTranscriptMessages(messages: Message[]): Message[] {
+  const agentMessages = messages.filter((message) => !isUserInputMessage(message));
+  const lastUserPromptIdx = [...messages].reverse().findIndex((message) => message.type === "user-prompt");
+  const startIdx = lastUserPromptIdx >= 0 ? messages.length - lastUserPromptIdx : 0;
+  const roundMessages = messages.slice(startIdx).filter((message) => !isUserInputMessage(message));
+  return roundMessages.length > 0 ? roundMessages : agentMessages;
+}
+
 // --- Spinner ---
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -210,13 +222,7 @@ export async function startRepl(
       process.stderr.write(chalk.dim("  No messages yet.\n\n"));
       return;
     }
-    // Show messages from the most recent round
-    const agentMessages = state.messages.filter((m) => m.type !== "user-prompt");
-    // Find messages from current round (after the last user-prompt)
-    const lastUserPromptIdx = [...state.messages].reverse().findIndex((m) => m.type === "user-prompt");
-    const startIdx = lastUserPromptIdx >= 0 ? state.messages.length - lastUserPromptIdx : 0;
-    const roundMessages = state.messages.slice(startIdx).filter((m) => m.type !== "user-prompt");
-    const msgs = roundMessages.length > 0 ? roundMessages : agentMessages;
+    const msgs = selectTranscriptMessages(state.messages);
 
     process.stderr.write("\n");
     for (const msg of msgs) {

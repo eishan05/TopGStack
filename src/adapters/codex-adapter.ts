@@ -38,7 +38,7 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async send(prompt: string, context: ConversationContext, signal?: AbortSignal): Promise<AgentResponse> {
-    const fullPrompt = context.systemPrompt + "\n\n" + prompt;
+    const fullPrompt = prompt;
 
     const threadOpts: ThreadOptions = {
       workingDirectory: context.workingDirectory,
