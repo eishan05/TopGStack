@@ -217,6 +217,12 @@ export function createTopgServer(opts: TopgServerOptions) {
       config,
     });
 
+    // Confirm to the requesting client with the new sessionId
+    ws.send(JSON.stringify({ type: "debate.started", sessionId }));
+
+    // Broadcast updated session list so all clients see the new active session
+    broadcastSessionsList();
+
     // Run debate asynchronously using runWithHistory (session already created)
     orchestrator.runWithHistory(prompt, [], sessionId, abortController.signal)
       .then((result) => handleDebateCompletion(sessionId, result))
