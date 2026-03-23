@@ -7,6 +7,7 @@ import { SessionManager } from "./session.js";
 import { ClaudeAdapter } from "./adapters/claude-adapter.js";
 import { CodexAdapter } from "./adapters/codex-adapter.js";
 import { Orchestrator } from "./orchestrator.js";
+import { DEFAULT_CODEX_CONFIG } from "./types.js";
 import type { OrchestratorConfig, OrchestratorResult } from "./types.js";
 
 const MIME_TYPES: Record<string, string> = {
@@ -40,6 +41,7 @@ export function createTopgServer(opts: TopgServerOptions) {
     guardrailRounds: 5,
     timeoutMs: 900000,
     outputFormat: "text",
+    codex: { ...DEFAULT_CODEX_CONFIG },
   };
 
   const activeDebates = new Map<string, ActiveDebate>();
