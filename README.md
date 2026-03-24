@@ -182,19 +182,15 @@ The system tracks individual claims using `[claim-N]` sections so nothing gets l
 
 Every debate is saved. Because winners keep records.
 
-```
-~/.topg/sessions/<session-id>/
-  ├── meta.json           # Config and status
-  ├── transcript.jsonl    # Full debate transcript
-  ├── artifacts/          # Code files produced
-  └── summary.md          # Final verdict
+```bash
+topg delete <id>                          # Delete a session
+topg clear --completed                    # Clear finished sessions
+topg clear --completed --older-than 7d    # Clean up old ones
 ```
 
-Manage your sessions:
+Resume any debate where you left off:
 ```bash
-topg sessions list
-topg sessions delete <id>
-topg sessions clear --status escalated
+topg --resume <session-id> "Focus on the caching layer"
 ```
 
 ---
@@ -213,47 +209,11 @@ topg "your hardest problem here"
 
 ---
 
-## The Tech Stack
+## Contribute
 
-| Component | Choice |
-|-----------|--------|
-| Language | TypeScript |
-| Runtime | Node.js 22+ |
-| CLI | Commander.js |
-| Claude | Spawns `claude` CLI via stdin |
-| Codex | `@openai/codex-sdk` |
-| Dashboard | Express + WebSocket |
-| Testing | Vitest |
+Want to make TOPG better? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
----
-
-## Architecture
-
-```
-src/
-├── index.ts              # CLI entry, Commander setup
-├── orchestrator.ts       # The arena, turn-based debate loop
-├── convergence.ts        # Detects when the fight is over
-├── adapters/
-│   ├── claude-adapter.ts # Claude CLI integration
-│   └── codex-adapter.ts  # Codex SDK integration
-├── session.ts            # Persistence manager
-├── prompts.ts            # System prompts for each role
-├── formatter.ts          # Consensus/escalation reports
-├── server.ts             # Dashboard HTTP + WebSocket
-├── repl.ts               # Interactive mode
-└── web/public/           # Dashboard frontend
-```
-
----
-
-## Running Tests
-
-```bash
-npm test
-```
-
-Tests exist because even the Top G verifies before he ships.
+For the philosophy, read [ETHOS.md](ETHOS.md). For the technical deep dive, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
