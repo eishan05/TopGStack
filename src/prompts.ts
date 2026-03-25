@@ -1,6 +1,17 @@
 import type { AgentName } from "./types.js";
 
+/**
+ * Check for a prompt override via TOPG_PROMPT_<ROLE> env var.
+ * Used by the eval harness to A/B test prompt variants.
+ */
+function envOverride(role: string): string | undefined {
+  return process.env[`TOPG_PROMPT_${role.toUpperCase()}`];
+}
+
 export function initiatorPrompt(otherAgent: AgentName): string {
+  const override = envOverride("initiator");
+  if (override) return override.replace("{{otherAgent}}", otherAgent);
+
   return `You are collaborating with another AI agent (${otherAgent}). Your counterpart will review your response.
 
 Instructions:
@@ -16,6 +27,9 @@ Instructions:
 }
 
 export function reviewerPrompt(otherAgent: AgentName): string {
+  const override = envOverride("reviewer");
+  if (override) return override.replace("{{otherAgent}}", otherAgent);
+
   return `Another AI agent (${otherAgent}) produced the following response. You are the reviewer.
 
 Instructions:
@@ -43,6 +57,9 @@ Omit sections that are empty.`;
 }
 
 export function rebuttalPrompt(reviewerAgent: AgentName): string {
+  const override = envOverride("rebuttal");
+  if (override) return override.replace("{{reviewerAgent}}", reviewerAgent);
+
   return `Your reviewer (${reviewerAgent}) has provided feedback on your previous response.
 
 Instructions:
@@ -76,6 +93,9 @@ Omit sections that are empty. Use the next available claim number for new claims
 }
 
 export function synthesisPrompt(): string {
+  const override = envOverride("synthesis");
+  if (override) return override;
+
   return `You are producing the final, consolidated answer from a multi-agent collaboration.
 
 You have access to the full debate transcript between two AI agents who collaborated on the user's request. They have reached consensus.
@@ -97,6 +117,9 @@ Rules:
 }
 
 export function escalationPrompt(): string {
+  const override = envOverride("escalation");
+  if (override) return override;
+
   return `You have been in a multi-round collaboration and have not yet reached full agreement. This is the final round before escalating to the user.
 
 Instructions:

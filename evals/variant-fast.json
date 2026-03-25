@@ -1,0 +1,8 @@
+{
+  "name": "fast-convergence",
+  "cliFlags": {
+    "guardrail": 3,
+    "timeout": 180,
+    "startWith": "codex"
+  }
+}

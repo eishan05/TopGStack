@@ -9,6 +9,8 @@ import { startRepl } from "./repl.js";
 import { createTopgServer } from "./server.js";
 import { askUser, parseDuration } from "./utils.js";
 import type { AgentName, CodexConfig, OrchestratorConfig, SessionMeta } from "./types.js";
+import { DEFAULT_CASES, runLive, runReplay, buildReport, formatReport } from "./evals/index.js";
+import type { VariantConfig, JudgeProvider, EvalCase } from "./evals/types.js";
 
 const program = new Command();
 
@@ -58,6 +60,127 @@ program
     } catch (err) {
       console.error(`Error: ${(err as Error).message}`);
       process.exit(1);
+    }
+  });
+
+program
+  .command("eval")
+  .description("A/B test prompt variants and CLI configurations")
+  .requiredOption("--variant-a <path>", "Path to variant A config JSON")
+  .requiredOption("--variant-b <path>", "Path to variant B config JSON")
+  .option("--cases <path>", "Path to custom cases module (default: built-in cases)")
+  .option("--judge <provider>", "Judge provider: claude or codex", "claude")
+  .option("--judge-timeout <seconds>", "Judge timeout per case in seconds", "120")
+  .option("--debate-timeout <seconds>", "Debate timeout per case in seconds", "600")
+  .option("--cwd <path>", "Working directory for debates", process.cwd())
+  .option("--replay <sessionIds...>", "Replay mode: score existing session IDs instead of running live debates")
+  .option("--save <path>", "Save raw results JSON to path")
+  .action(async (opts) => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+
+    // Load variant configs
+    let configA: VariantConfig;
+    let configB: VariantConfig;
+    try {
+      configA = JSON.parse(fs.readFileSync(path.resolve(opts.variantA), "utf-8"));
+      configB = JSON.parse(fs.readFileSync(path.resolve(opts.variantB), "utf-8"));
+    } catch (err) {
+      console.error(`Error loading variant configs: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    if (!configA.name || !configB.name) {
+      console.error("Error: Both variant configs must have a \"name\" field.");
+      process.exit(1);
+    }
+
+    const judgeProvider = (opts.judge as JudgeProvider) ?? "claude";
+    const judgeTimeout = parseInt(opts.judgeTimeout, 10) * 1000;
+    const debateTimeout = parseInt(opts.debateTimeout, 10) * 1000;
+
+    // Replay mode
+    if (opts.replay) {
+      console.error(`Replay mode: scoring ${opts.replay.length} session(s) with ${judgeProvider} judge...\n`);
+      const results = await runReplay(
+        opts.replay as string[],
+        judgeProvider,
+        judgeTimeout,
+        undefined,
+        (sid) => console.error(`  Scoring session ${sid}...`),
+      );
+
+      for (const r of results) {
+        if (r.error) {
+          console.error(`  ${r.caseId}: ERROR — ${r.error}`);
+        } else if (r.scores) {
+          const total = r.scores.tradeoffSurfacing + r.scores.synthesisQuality +
+            r.scores.convergenceEfficiency + r.scores.noCapitulation;
+          console.error(`  ${r.caseId}: ${total}/20 (${r.converged ? "consensus" : "escalation"}, ${r.rounds} rounds)`);
+          console.error(`    ${r.scores.rationale}`);
+        }
+      }
+
+      if (opts.save) {
+        fs.writeFileSync(path.resolve(opts.save), JSON.stringify(results, null, 2));
+        console.error(`\nResults saved to ${opts.save}`);
+      }
+      return;
+    }
+
+    // Live A/B mode
+    let cases: EvalCase[] = DEFAULT_CASES;
+    if (opts.cases) {
+      try {
+        const casesModule = await import(path.resolve(opts.cases));
+        cases = casesModule.default ?? casesModule.cases ?? casesModule.DEFAULT_CASES;
+      } catch (err) {
+        console.error(`Error loading cases: ${(err as Error).message}`);
+        process.exit(1);
+      }
+    }
+
+    console.error(`A/B Eval: "${configA.name}" vs "${configB.name}"`);
+    console.error(`Cases: ${cases.length} | Judge: ${judgeProvider}`);
+    console.error(`Debate timeout: ${debateTimeout / 1000}s | Judge timeout: ${judgeTimeout / 1000}s\n`);
+
+    const runOpts = {
+      cwd: opts.cwd as string,
+      judgeProvider,
+      judgeTimeoutMs: judgeTimeout,
+      debateTimeoutMs: debateTimeout,
+      onCaseStart: (caseId: string, variant: string) => {
+        console.error(`  [${variant}] Running case: ${caseId}...`);
+      },
+      onCaseEnd: (result: import("./evals/types.js").CaseResult) => {
+        if (result.error) {
+          console.error(`  [${result.variant}] ${result.caseId}: ERROR — ${result.error}`);
+        } else {
+          const total = result.scores
+            ? result.scores.tradeoffSurfacing + result.scores.synthesisQuality +
+              result.scores.convergenceEfficiency + result.scores.noCapitulation
+            : 0;
+          console.error(`  [${result.variant}] ${result.caseId}: ${total}/20 (${Math.round(result.durationMs / 1000)}s)`);
+        }
+      },
+    };
+
+    console.error("Running variant A...");
+    const resultsA = await runLive(cases, configA, runOpts);
+
+    console.error("\nRunning variant B...");
+    const resultsB = await runLive(cases, configB, runOpts);
+
+    const caseCategories = new Map(cases.map((c) => [c.id, c.category]));
+    const report = buildReport(configA, resultsA, configB, resultsB, caseCategories);
+
+    console.error("");
+    console.log(formatReport(report));
+
+    if (opts.save) {
+      const savePath = path.resolve(opts.save);
+      fs.writeFileSync(savePath, JSON.stringify(report, null, 2));
+      console.error(`\nFull report saved to ${savePath}`);
     }
   });
 

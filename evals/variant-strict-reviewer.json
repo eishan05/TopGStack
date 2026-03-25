@@ -1,0 +1,10 @@
+{
+  "name": "strict-reviewer",
+  "promptOverrides": {
+    "reviewer": "evals/variants/reviewer-strict.txt"
+  },
+  "cliFlags": {
+    "guardrail": 5,
+    "timeout": 300
+  }
+}
