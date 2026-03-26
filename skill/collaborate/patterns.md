@@ -30,12 +30,12 @@ Focus on substantive issues. Be thorough." --output json --yolo --cwd "$(pwd)"
 
 5. **Send re-review request:**
 ```bash
-topg collaborate send --last "I've addressed your findings:
+topg collaborate send "I've addressed your findings:
 1. [BUG] path:42 — Fixed: <what you did>
 2. [POTENTIAL ISSUE] path:15 — Fixed: <what you did>
 3. [STYLE] path:88 — Skipped: I disagree because <reason>
 
-Please verify fixes, reconsider findings I pushed back on, and report any NEW issues." --output json
+Please verify fixes, reconsider findings I pushed back on, and report any NEW issues." --last --output json
 ```
 
 6. **Repeat** until clean or 3 iterations.
@@ -70,7 +70,7 @@ Questions:
 
 3. **Optionally follow up:**
 ```bash
-topg collaborate send --last "Good point on <X>. I'll adjust my approach to <Y>. But I disagree on <Z> because <reason>. What about <new question>?" --output json
+topg collaborate send "Good point on <X>. I'll adjust my approach to <Y>. But I disagree on <Z> because <reason>. What about <new question>?" --last --output json
 ```
 
 4. **End when satisfied:** `topg collaborate end --last`
@@ -102,7 +102,7 @@ Also check for edge cases I might have missed. The implementation is in <file pa
 
 3. **Optionally deep-dive:**
 ```bash
-topg collaborate send --last "You flagged <concern>. Here's how I handle it: <explanation>. Is that sufficient, or do you see a gap?" --output json
+topg collaborate send "You flagged <concern>. Here's how I handle it: <explanation>. Is that sufficient, or do you see a gap?" --last --output json
 ```
 
 4. **End session:** `topg collaborate end --last`

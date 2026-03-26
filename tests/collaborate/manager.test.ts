@@ -163,6 +163,8 @@ describe("CollaborationManager", () => {
       const adapter = createMockAdapter("Response");
       const manager = new CollaborationManager(adapter, sessionManager, baseConfig);
       await manager.start("First");
+      // Ensure distinct updatedAt timestamps for deterministic sort order
+      await new Promise((r) => setTimeout(r, 20));
       const { sessionId: latest } = await manager.start("Second");
       const resolved = manager.resolveSessionId("--last");
       expect(resolved).toBe(latest);
@@ -177,7 +179,15 @@ describe("CollaborationManager", () => {
     it("should throw if --last but no collaborate sessions exist", () => {
       const adapter = createMockAdapter("Response");
       const manager = new CollaborationManager(adapter, sessionManager, baseConfig);
-      expect(() => manager.resolveSessionId("--last")).toThrow("No collaboration sessions found");
+      expect(() => manager.resolveSessionId("--last")).toThrow("No active collaboration sessions found");
+    });
+
+    it("should throw if --last but all collaborate sessions are closed", async () => {
+      const adapter = createMockAdapter("Response");
+      const manager = new CollaborationManager(adapter, sessionManager, baseConfig);
+      const { sessionId } = await manager.start("Will close");
+      await manager.end(sessionId);
+      expect(() => manager.resolveSessionId("--last")).toThrow("No active collaboration sessions found");
     });
   });
 });

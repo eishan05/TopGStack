@@ -4,6 +4,42 @@ All notable changes to TOPG. Format based on [Keep a Changelog](https://keepacha
 
 ---
 
+## [2.0.0] — 2026-03-26
+
+The restructure. Two tools enter. Maximum leverage achieved.
+
+### Added
+- `topg collaborate` — session-based cross-model collaboration (start/send/end/list)
+- Explicit `--with <claude|codex>` agent selection for collaboration
+- `--session <id>` and `--last` flags for targeting collaboration sessions
+- `--closed` flag for `session clear` to clean up closed collaboration sessions
+- `src/collaborate/` module — manager, prompts, types
+- `src/core/` shared layer — types, adapters, session manager, convergence tag parser
+- `/collaborate` skill with code review loop, design consultation, and validation patterns
+- `/debate` skill (updated from old `/topg-debate`)
+- `topg session` subcommand for managing both debate and collaborate sessions
+- Session type field (`"debate"` | `"collaborate"`) with backwards compatibility for legacy sessions
+- Agent validation (`--with`, `--start-with` must be "claude" or "codex")
+- Mutual exclusivity enforcement for `--session` and `--last`
+
+### Changed
+- **BREAKING:** `topg "<prompt>"` is now `topg debate "<prompt>"`
+- **BREAKING:** `topg delete/clear` is now `topg session delete/clear`
+- Codebase restructured into `src/core/`, `src/debate/`, `src/collaborate/`
+- Session manager generalized to support both session types
+- `--last` resolves to the most recent *active* session (not any session)
+- Version bumped to 2.0.0
+
+### Removed
+- Web dashboard (`src/server.ts`, `src/web/`)
+- REPL mode (`src/repl.ts`)
+- Eval framework (`src/evals/`)
+- `--no-dashboard` flag (no dashboard to disable)
+- `topg serve` command
+- Implicit REPL when running bare `topg`
+
+---
+
 ## [1.0.0] — 2026-03-23
 
 The first release. Two models enter. One answer leaves.

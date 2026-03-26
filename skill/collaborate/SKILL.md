@@ -53,18 +53,25 @@ Returns JSON:
 ### Send Follow-Up Messages
 
 ```bash
-topg collaborate send --last "<your message>" --output json
+topg collaborate send "<your message>" --last --output json
 ```
 
 Or with explicit session ID:
 ```bash
-topg collaborate send abc123 "<your message>" --output json
+topg collaborate send "<your message>" --session abc123 --output json
 ```
+
+Note: `--session` and `--last` are mutually exclusive. You must provide one.
 
 ### Close the Session
 
 ```bash
 topg collaborate end --last
+```
+
+Or with explicit session ID:
+```bash
+topg collaborate end --session abc123
 ```
 
 ### List Sessions

@@ -40,13 +40,12 @@ The entry point is `src/index.ts`. Built output goes to `dist/`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full technical breakdown. The short version:
 
-- `src/orchestrator.ts` — The debate engine
-- `src/adapters/` — Claude and Codex integrations
-- `src/convergence.ts` — Consensus detection
-- `src/session.ts` — Persistence layer
-- `src/server.ts` + `src/web/` — Dashboard
-- `skill/` — Claude Code skill integration
-- `tests/` — Test files
+- `src/core/` — Shared infrastructure (adapters, session manager, types)
+- `src/debate/` — Turn-based debate engine (orchestrator, convergence, prompts, formatter)
+- `src/collaborate/` — Session-based collaboration (manager, prompts)
+- `skill/debate/` — `/debate` Claude Code skill
+- `skill/collaborate/` — `/collaborate` Claude Code skill with pattern recipes
+- `tests/` — Test files mirroring src structure
 
 ---
 
@@ -62,10 +61,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full technical breakdown. The sho
 
 ## What We Need
 
-- **New adapters** — Gemini, Llama, Mistral, whatever's next. The adapter interface is clean — see `src/adapters/agent-adapter.ts`.
+- **New adapters** — Gemini, Llama, Mistral, whatever's next. The adapter interface is clean — see `src/core/adapters/agent-adapter.ts`.
 - **Better convergence detection** — Smarter consensus signals, semantic diff comparison
-- **Dashboard improvements** — The web UI is functional but could be sharper
-- **Skill improvements** — Make the Claude Code integration smoother
+- **Skill improvements** — Make the Claude Code skills smoother
+- **New collaboration patterns** — See `skill/collaborate/patterns.md` for the existing ones
 - **Bug fixes** — If you find one, crush it
 
 ---

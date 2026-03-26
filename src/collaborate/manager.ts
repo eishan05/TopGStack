@@ -124,6 +124,11 @@ export class CollaborationManager {
 
   async end(sessionId: string): Promise<CollaborateEndResult> {
     const { meta, messages } = this.session.load(sessionId);
+
+    if (meta.type !== "collaborate") {
+      throw new Error(`Session ${sessionId} is not a collaborate session`);
+    }
+
     this.session.updateStatus(sessionId, "closed");
     return {
       sessionId,
@@ -149,9 +154,9 @@ export class CollaborationManager {
 
   resolveSessionId(sessionIdOrLast: string): string {
     if (sessionIdOrLast === "--last") {
-      const sessions = this.session.filterSessions({ type: "collaborate" });
+      const sessions = this.session.filterSessions({ type: "collaborate", statuses: ["active"] });
       if (sessions.length === 0) {
-        throw new Error("No collaboration sessions found");
+        throw new Error("No active collaboration sessions found");
       }
       return sessions[0].sessionId;
     }

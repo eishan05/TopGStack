@@ -13,6 +13,14 @@ import type { AgentName, CodexConfig } from "./core/types.js";
 import type { DebateConfig } from "./debate/types.js";
 import type { CollaborateConfig } from "./collaborate/types.js";
 
+function validateAgent(value: string, flag: string): AgentName {
+  if (value !== "claude" && value !== "codex") {
+    console.error(`Error: ${flag} must be "claude" or "codex", got "${value}".`);
+    process.exit(1);
+  }
+  return value;
+}
+
 const program = new Command();
 
 program
@@ -44,6 +52,11 @@ const debate = program
       return;
     }
 
+    if (opts.resume && !prompt) {
+      console.error("Error: --resume requires a guidance prompt. Usage: topg debate --resume <sessionId> \"your guidance\"");
+      process.exit(1);
+    }
+
     if (!process.env.OPENAI_API_KEY) {
       console.error("Error: OPENAI_API_KEY is required for Codex.");
       process.exit(1);
@@ -59,8 +72,9 @@ const debate = program
     };
 
     const yolo = !!opts.yolo;
+    const startWith = validateAgent(opts.startWith, "--start-with");
     const config: DebateConfig = {
-      startWith: opts.startWith as AgentName,
+      startWith,
       workingDirectory: opts.cwd,
       guardrailRounds: parseInt(opts.guardrail, 10),
       timeoutMs: parseInt(opts.timeout, 10) * 1000,
@@ -153,7 +167,9 @@ collaborate
   .option("--codex-reasoning <effort>", "Codex reasoning effort")
   .option("--yolo", "Skip all permission checks")
   .action(async (prompt: string, opts) => {
-    if (!process.env.OPENAI_API_KEY && opts.with === "codex") {
+    const withAgent = validateAgent(opts.with, "--with");
+
+    if (!process.env.OPENAI_API_KEY && withAgent === "codex") {
       console.error("Error: OPENAI_API_KEY is required for Codex.");
       process.exit(1);
     }
@@ -168,7 +184,7 @@ collaborate
     };
 
     const config: CollaborateConfig = {
-      with: opts.with as AgentName,
+      with: withAgent,
       workingDirectory: opts.cwd,
       timeoutMs: parseInt(opts.timeout, 10) * 1000,
       outputFormat: opts.output as "text" | "json",
@@ -176,7 +192,7 @@ collaborate
       yolo,
     };
 
-    const adapter = opts.with === "codex"
+    const adapter = withAgent === "codex"
       ? new CodexAdapter(config.timeoutMs, config.codex, yolo)
       : new ClaudeAdapter(config.timeoutMs, yolo);
     const session = new SessionManager();
@@ -196,32 +212,33 @@ collaborate
   });
 
 collaborate
-  .command("send <sessionIdOrLast> <message>")
+  .command("send <message>")
   .description("Send a follow-up message to an active collaboration session")
+  .option("--session <id>", "Session ID to send to")
+  .option("--last", "Use the most recent collaboration session")
   .option("--output <format>", "Output format (text or json)", "json")
-  .action(async (sessionIdOrLast: string, message: string, opts) => {
-    const session = new SessionManager();
-    // We need to load the session to reconstruct the config and adapter
-    // Use a temporary manager just for resolveSessionId, then rebuild
-    const tempConfig: CollaborateConfig = {
-      with: "codex", // placeholder, will be overridden
-      workingDirectory: process.cwd(),
-      timeoutMs: 900000,
-      outputFormat: opts.output as "text" | "json",
-      codex: { sandboxMode: "read-only", webSearchMode: "live", networkAccessEnabled: true, approvalPolicy: "never" },
-    };
-
-    // Resolve --last
-    const resolvedId = sessionIdOrLast === "--last"
-      ? session.filterSessions({ type: "collaborate" })?.[0]?.sessionId
-      : sessionIdOrLast;
-
-    if (!resolvedId) {
-      console.error("Error: No collaboration sessions found.");
+  .action(async (message: string, opts) => {
+    if (opts.session && opts.last) {
+      console.error("Error: --session and --last are mutually exclusive.");
+      process.exit(1);
+    }
+    if (!opts.session && !opts.last) {
+      console.error("Error: Provide --session <id> or --last.");
       process.exit(1);
     }
 
-    // Load session to get the agent and config
+    const session = new SessionManager();
+
+    try {
+    const resolvedId = opts.last
+      ? session.filterSessions({ type: "collaborate", statuses: ["active"] })?.[0]?.sessionId
+      : opts.session;
+
+    if (!resolvedId) {
+      console.error("Error: No active collaboration sessions found.");
+      process.exit(1);
+    }
+
     const { meta } = session.load(resolvedId);
     if (meta.type !== "collaborate") {
       console.error(`Error: Session ${resolvedId} is not a collaborate session.`);
@@ -231,13 +248,14 @@ collaborate
     const agentName = meta.agent as AgentName;
     const savedConfig = meta.config as unknown as CollaborateConfig;
     const yolo = savedConfig.yolo ?? false;
+    const defaultCodex = { sandboxMode: "read-only" as const, webSearchMode: "live" as const, networkAccessEnabled: true, approvalPolicy: "never" as const };
 
     const config: CollaborateConfig = {
       with: agentName,
       workingDirectory: savedConfig.workingDirectory ?? process.cwd(),
       timeoutMs: savedConfig.timeoutMs ?? 900000,
       outputFormat: opts.output as "text" | "json",
-      codex: savedConfig.codex ?? tempConfig.codex,
+      codex: savedConfig.codex ?? defaultCodex,
       yolo,
     };
 
@@ -246,13 +264,12 @@ collaborate
       : new ClaudeAdapter(config.timeoutMs, yolo);
     const manager = new CollaborationManager(adapter, session, config);
 
-    try {
-      const result = await manager.send(resolvedId, message);
-      if (config.outputFormat === "json") {
-        console.log(JSON.stringify(result, null, 2));
-      } else {
-        console.log(result.response);
-      }
+    const result = await manager.send(resolvedId, message);
+    if (config.outputFormat === "json") {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(result.response);
+    }
     } catch (err) {
       console.error("Collaboration send failed:", (err as Error).message);
       process.exit(1);
@@ -260,22 +277,39 @@ collaborate
   });
 
 collaborate
-  .command("end <sessionIdOrLast>")
+  .command("end")
   .description("Close a collaboration session")
+  .option("--session <id>", "Session ID to close")
+  .option("--last", "Use the most recent collaboration session")
   .option("--output <format>", "Output format (text or json)", "json")
-  .action(async (sessionIdOrLast: string, opts) => {
+  .action(async (opts) => {
+    if (opts.session && opts.last) {
+      console.error("Error: --session and --last are mutually exclusive.");
+      process.exit(1);
+    }
+    if (!opts.session && !opts.last) {
+      console.error("Error: Provide --session <id> or --last.");
+      process.exit(1);
+    }
+
     const session = new SessionManager();
 
-    const resolvedId = sessionIdOrLast === "--last"
-      ? session.filterSessions({ type: "collaborate" })?.[0]?.sessionId
-      : sessionIdOrLast;
+    try {
+    const resolvedId = opts.last
+      ? session.filterSessions({ type: "collaborate", statuses: ["active"] })?.[0]?.sessionId
+      : opts.session;
 
     if (!resolvedId) {
-      console.error("Error: No collaboration sessions found.");
+      console.error("Error: No active collaboration sessions found.");
       process.exit(1);
     }
 
     const { meta } = session.load(resolvedId);
+    if (meta.type !== "collaborate") {
+      console.error(`Error: Session ${resolvedId} is not a collaborate session.`);
+      process.exit(1);
+    }
+
     const config: CollaborateConfig = {
       with: (meta.agent ?? "codex") as AgentName,
       workingDirectory: process.cwd(),
@@ -284,19 +318,17 @@ collaborate
       codex: { sandboxMode: "read-only", webSearchMode: "live", networkAccessEnabled: true, approvalPolicy: "never" },
     };
 
-    // Adapter is not used for end, but CollaborationManager requires one
     const adapter = config.with === "codex"
       ? new CodexAdapter(config.timeoutMs, config.codex, false)
       : new ClaudeAdapter(config.timeoutMs, false);
     const manager = new CollaborationManager(adapter, session, config);
 
-    try {
-      const result = await manager.end(resolvedId);
-      if (config.outputFormat === "json") {
-        console.log(JSON.stringify(result, null, 2));
-      } else {
-        console.log(`Session ${result.sessionId} closed. ${result.messageCount} messages.`);
-      }
+    const result = await manager.end(resolvedId);
+    if (config.outputFormat === "json") {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`Session ${result.sessionId} closed. ${result.messageCount} messages.`);
+    }
     } catch (err) {
       console.error("Collaboration end failed:", (err as Error).message);
       process.exit(1);
@@ -364,14 +396,15 @@ sessionCmd
   .option("--all", "Delete all sessions")
   .option("--completed", "Delete completed sessions")
   .option("--escalated", "Delete escalated sessions")
+  .option("--closed", "Delete closed sessions (collaborate)")
   .option("--older-than <duration>", "Only sessions not updated within duration")
   .option("--force", "Skip confirmation prompt")
   .action(async (opts) => {
-    if (!opts.all && !opts.completed && !opts.escalated && !opts.olderThan) {
-      console.error("Error: At least one filter required (--all, --completed, --escalated, --older-than).");
+    if (!opts.all && !opts.completed && !opts.escalated && !opts.closed && !opts.olderThan) {
+      console.error("Error: At least one filter required (--all, --completed, --escalated, --closed, --older-than).");
       process.exit(1);
     }
-    if (opts.all && (opts.completed || opts.escalated || opts.olderThan)) {
+    if (opts.all && (opts.completed || opts.escalated || opts.closed || opts.olderThan)) {
       console.error("Error: --all cannot be combined with other filters.");
       process.exit(1);
     }
@@ -381,9 +414,10 @@ sessionCmd
     if (opts.all) {
       sessions = session.listSessions();
     } else {
-      const statuses: Array<"completed" | "escalated"> = [];
+      const statuses: Array<"completed" | "escalated" | "closed"> = [];
       if (opts.completed) statuses.push("completed");
       if (opts.escalated) statuses.push("escalated");
+      if (opts.closed) statuses.push("closed");
       let olderThan: Date | undefined;
       if (opts.olderThan) {
         olderThan = new Date(Date.now() - parseDuration(opts.olderThan));
@@ -396,8 +430,24 @@ sessionCmd
       return;
     }
 
+    // Warn about active/paused sessions that could be resumed
+    if (!opts.all && !opts.completed && !opts.escalated && !opts.closed) {
+      const resumable = sessions.filter((s) => s.status === "active" || s.status === "paused");
+      if (resumable.length > 0) {
+        console.error(`Warning: ${resumable.length} active/paused session(s) will be deleted.`);
+        console.error("Use --completed, --escalated, or --closed to target only finished sessions.");
+      }
+    }
+
     if (!opts.force) {
-      console.error(`About to delete ${sessions.length} session(s).`);
+      const statusCounts = new Map<string, number>();
+      for (const s of sessions) {
+        statusCounts.set(s.status, (statusCounts.get(s.status) ?? 0) + 1);
+      }
+      const breakdown = Array.from(statusCounts.entries())
+        .map(([status, count]) => `${count} ${status}`)
+        .join(", ");
+      console.error(`About to delete ${sessions.length} session(s): ${breakdown}`);
       const answer = await askUser("Continue? (y/N) ");
       if (answer.toLowerCase() !== "y") {
         console.error("Aborted.");

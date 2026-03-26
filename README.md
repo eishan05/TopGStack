@@ -11,18 +11,22 @@ Listen. Most developers out there are using ONE AI model like broke people drivi
 
 TOPG throws Claude and Codex into the arena. Two elite AI agents. Head to head. No mercy. They debate, they argue, they tear each other's solutions apart, and what comes out the other side is a battle-tested answer that ACTUALLY WORKS. Because the best ideas don't come from comfort. They come from WAR.
 
+And when you need a second opinion mid-task? TOPG opens a collaboration session with the other model. Code review, design consultation, validation — on demand, session-based, under YOUR control.
+
 > "If you're making architectural decisions with only one AI, you're mentally broke."
 
 ---
 
 ## What Is This
 
-TOPG is a TypeScript CLI that orchestrates **turn-based debates between Claude and Codex**. You give it a problem. Both agents fight over the solution. They critique each other's code. They defend their positions. They either converge on the superior answer, or they escalate to you with a structured disagreement report so YOU can be the judge.
+TOPG is a TypeScript CLI with two tools:
 
-This is **intellectual combat**.
+### `topg debate` — Intellectual Combat
+
+You give it a problem. Both agents fight over the solution. They critique each other's code. They defend their positions. They either converge on the superior answer, or they escalate to you with a structured disagreement report so YOU can be the judge.
 
 ```
-You: "How should I structure my auth middleware?"
+You: topg debate "How should I structure my auth middleware?"
 
 Claude: *proposes solution with trade-offs*
 Codex:  *tears it apart, offers counter-proposal*
@@ -30,6 +34,18 @@ Claude: *defends position, concedes valid points*
 Codex:  *accepts improvements, pushes back on weakness*
 
 → CONSENSUS REACHED → Battle-tested solution delivered
+```
+
+### `topg collaborate` — On-Demand Cross-Model Collaboration
+
+Open a session with the other AI model mid-task. Exchange messages over time. Close when done. You control the flow.
+
+```
+You: topg collaborate start --with codex "Review my implementation for bugs"
+Codex: "Found 3 issues: ..."
+You: topg collaborate send "Fixed issues 1 and 3. Re-review?" --last
+Codex: "Clean. Issue 2 is still present at line 42."
+You: topg collaborate end --last
 ```
 
 ---
@@ -40,13 +56,16 @@ Because mediocrity is a CHOICE.
 
 - **One model gives you one perspective.** That's a poor person's mindset.
 - **Two models debating gives you the TRUTH.** Every weakness gets exposed. Every edge case gets caught. Every lazy shortcut gets called out.
+- **Two models collaborating mid-task** means you catch bugs before they ship, validate designs before you commit, and get a second opinion without leaving your terminal.
 - **Your code gets pressure-tested** before it ever hits production. While other developers are shipping bugs, you're shipping excellence.
 
 Use TOPG for decisions that actually matter:
-- Architectural choices
-- Security-sensitive code review
-- API design
-- Complex debugging when you're stuck
+- Architectural choices (debate)
+- Security-sensitive code review (collaborate or debate)
+- API design (debate)
+- Mid-task code review (collaborate)
+- Complex debugging when you're stuck (debate)
+- Design consultation before committing to an approach (collaborate)
 - Any decision where being wrong costs you
 
 ---
@@ -74,47 +93,71 @@ TOPG makes your subscriptions WORK FOR YOU. While you sleep, while you think, wh
 
 > "What color is your Bugatti?" Irrelevant. What matters is: are your AI models fighting for you, or are they sitting idle like expensive furniture?
 
-### Claude Code Skill
+### Claude Code Skills
 
 Tell Claude Code:
 
 ```
 Install the topg-debate skill from https://github.com/eishan05/topgstack
+Install the topg-collaborate skill from https://github.com/eishan05/topgstack
 ```
 
-Now `/topg-debate` works in any session. Both models fight without you leaving the terminal.
+Now `/debate` and `/collaborate` work in any session. Both models fight or collaborate without you leaving the terminal.
 
 ---
 
 ## Usage
 
-### One-Shot Mode: Ask and Receive
+### Debate: Ask and Receive
 
 ```bash
-topg "Design a rate limiter that handles distributed systems"
+topg debate "Design a rate limiter that handles distributed systems"
 ```
 
 Both agents fight. You get the winner's answer. Simple.
 
-### REPL Mode: The War Room
+### Debate: Resume a Deadlock
 
 ```bash
-topg
-```
-
-Opens an interactive session with a live web dashboard. Watch the debate unfold in real-time like you're ringside at a championship fight.
-
-### Resume a Paused Session
-
-```bash
-topg --resume <session-id> "Focus on the caching layer, the DB approach is settled"
+topg debate --resume <session-id> "Focus on the caching layer, the DB approach is settled"
 ```
 
 Come back to a deadlocked debate with fresh guidance. YOU are the top G. You break the tie.
 
+### Collaborate: Start a Session
+
+```bash
+topg collaborate start --with codex "Review my auth implementation for security issues" --output json --yolo --cwd "$(pwd)"
+```
+
+### Collaborate: Send Follow-Ups
+
+```bash
+topg collaborate send "I fixed the token validation. Re-review?" --last --output json
+```
+
+Or with an explicit session ID:
+```bash
+topg collaborate send "Re-review?" --session abc123 --output json
+```
+
+### Collaborate: End the Session
+
+```bash
+topg collaborate end --last
+```
+
+### Collaborate: List Sessions
+
+```bash
+topg collaborate list --active --output json
+```
+
 ---
 
 ## Options
+
+### Debate Options
 
 | Flag | What It Does |
 |------|-------------|
@@ -122,13 +165,40 @@ Come back to a deadlocked debate with fresh guidance. YOU are the top G. You bre
 | `--guardrail <N>` | Rounds before escalation (default: 5) |
 | `--timeout <seconds>` | Per-turn time limit, no stalling |
 | `--yolo` | Skip all permission checks. Full send. |
-| `--no-dashboard` | No web UI. Raw terminal output only. |
 | `--cwd <path>` | Working directory for the agents |
+| `--output <text\|json>` | Output format (default: text) |
+| `--resume <sessionId>` | Resume a paused debate with guidance |
+| `--codex-sandbox <mode>` | Codex sandbox mode |
+| `--codex-web-search <mode>` | Codex web search mode |
+| `--codex-reasoning <effort>` | Codex reasoning effort |
+
+### Collaborate Options (start)
+
+| Flag | What It Does |
+|------|-------------|
+| `--with <claude\|codex>` | Which model to collaborate with (required) |
+| `--cwd <path>` | Working directory |
+| `--output <text\|json>` | Output format (default: json) |
+| `--timeout <seconds>` | Per-turn timeout |
+| `--yolo` | Skip all permission checks |
+| `--codex-sandbox <mode>` | Codex sandbox mode (default: read-only) |
+| `--codex-web-search <mode>` | Codex web search mode |
+| `--codex-reasoning <effort>` | Codex reasoning effort |
+
+### Collaborate Options (send/end)
+
+| Flag | What It Does |
+|------|-------------|
+| `--session <id>` | Target a specific session |
+| `--last` | Use the most recent active session |
+| `--output <text\|json>` | Output format (default: json) |
+
+Note: `--session` and `--last` are mutually exclusive. You must provide one.
 
 ### The `--yolo` Flag
 
 ```bash
-topg --yolo "Refactor the entire payment system"
+topg debate --yolo "Refactor the entire payment system"
 ```
 
 This is how real G's outside the matrix operate. `--yolo` skips ALL permission checks for both agents. Claude gets `--dangerously-skip-permissions`, Codex gets full sandbox access. No confirmation dialogs. No "are you sure?" popups. No waiting for approval from your corporate overlord to run a command on YOUR computer.
@@ -178,19 +248,17 @@ The system tracks individual claims using `[claim-N]` sections so nothing gets l
 
 ---
 
-## Session Persistence
+## Session Management
 
-Every debate is saved. Because winners keep records.
+Every debate and collaboration session is saved. Because winners keep records.
 
 ```bash
-topg delete <id>                          # Delete a session
-topg clear --completed                    # Clear finished sessions
-topg clear --completed --older-than 7d    # Clean up old ones
-```
-
-Resume any debate where you left off:
-```bash
-topg --resume <session-id> "Focus on the caching layer"
+topg session list                                     # List all sessions
+topg session delete <id>                              # Delete a session
+topg session clear --completed                        # Clear finished debates
+topg session clear --closed                           # Clear closed collaborations
+topg session clear --completed --older-than 7d        # Clean up old ones
+topg session clear --all --force                      # Nuclear option
 ```
 
 ---
@@ -204,7 +272,8 @@ TOPG is for builders who understand that **the best solutions survive criticism*
 Stop being a one-model developer. **Escape the matrix.**
 
 ```bash
-topg "your hardest problem here"
+topg debate "your hardest problem here"
+topg collaborate start --with codex "review what I just built"
 ```
 
 ---

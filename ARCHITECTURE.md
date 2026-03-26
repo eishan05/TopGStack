@@ -13,7 +13,6 @@ Technical reference for contributors and the curious. For the philosophy, see [E
 | CLI | Commander.js | Battle-tested CLI framework |
 | Claude | Spawns `claude` CLI via stdin | Uses existing auth, no API key required if logged in |
 | Codex | `@openai/codex-sdk` | Official SDK, full sandbox control |
-| Dashboard | Express + WebSocket | Real-time debate streaming |
 | Testing | Vitest | Fast, native ESM support |
 
 ---
@@ -22,31 +21,58 @@ Technical reference for contributors and the curious. For the philosophy, see [E
 
 ```
 src/
-├── index.ts              # CLI entry point, Commander setup
-├── orchestrator.ts       # The arena — turn-based debate loop
-├── convergence.ts        # Detects when the fight is over
-├── adapters/
-│   ├── agent-adapter.ts  # Base adapter interface
-│   ├── claude-adapter.ts # Claude CLI integration
-│   └── codex-adapter.ts  # Codex SDK integration
-├── session.ts            # Session persistence manager
-├── prompts.ts            # System prompts for each role
-├── formatter.ts          # Consensus/escalation report formatting
-├── types.ts              # Core type definitions
-├── utils.ts              # Utility functions
-├── server.ts             # Dashboard HTTP + WebSocket server
-├── repl.ts               # Interactive REPL mode
-└── web/public/           # Dashboard frontend
-    ├── index.html
-    ├── styles.css
-    └── app.js
+├── index.ts                    # CLI entry point — debate, collaborate, session subcommands
+├── core/
+│   ├── adapters/
+│   │   ├── agent-adapter.ts    # Base adapter interface
+│   │   ├── claude-adapter.ts   # Claude CLI integration
+│   │   └── codex-adapter.ts    # Codex SDK integration
+│   ├── session.ts              # Session persistence manager
+│   ├── convergence-tag.ts      # Shared convergence tag parser
+│   ├── types.ts                # Core type definitions (shared by debate + collaborate)
+│   └── utils.ts                # Utility functions
+├── debate/
+│   ├── orchestrator.ts         # Turn-based debate loop
+│   ├── convergence.ts          # Convergence detection
+│   ├── prompts.ts              # Debate system prompts
+│   ├── formatter.ts            # Consensus/escalation report formatting
+│   └── types.ts                # Debate-specific types
+├── collaborate/
+│   ├── manager.ts              # Session lifecycle: start, send, end, list
+│   ├── prompts.ts              # Collaboration system prompts
+│   └── types.ts                # Collaborate-specific types
+skill/
+├── debate/
+│   └── SKILL.md                # /debate skill for Claude Code
+├── collaborate/
+│   ├── SKILL.md                # /collaborate skill for Claude Code
+│   └── patterns.md             # Code review, design consultation, validation recipes
+tests/
+├── core/
+│   └── session.test.ts         # Session persistence tests
+├── debate/
+│   ├── convergence.test.ts     # Convergence detection tests
+│   └── formatter.test.ts       # Report formatting tests
+├── collaborate/
+│   └── manager.test.ts         # Collaboration lifecycle tests
 ```
 
 ---
 
 ## Core Components
 
-### Orchestrator (`orchestrator.ts`)
+### Shared Core (`src/core/`)
+
+The core layer is shared by both debate and collaborate. It provides:
+
+- **Types** (`types.ts`) — `AgentName`, `SessionType`, `SessionStatus`, `SessionMeta`, `Message`, `AgentResponse`, `CodexConfig`, `Artifact`, `ToolActivity`, `ConvergenceSignal`
+- **Adapters** (`adapters/`) — Model-agnostic `AgentAdapter` interface with Claude and Codex implementations
+- **Session Manager** (`session.ts`) — Disk-based session persistence to `~/.topg/sessions/`
+- **Convergence Tag Parser** (`convergence-tag.ts`) — Shared `[CONVERGENCE: signal]` regex parser used by both adapters
+
+### Debate Engine (`src/debate/`)
+
+#### Orchestrator (`orchestrator.ts`)
 
 The brain. Manages the turn-based debate loop:
 
@@ -56,14 +82,7 @@ The brain. Manages the turn-based debate loop:
 4. Checks for convergence after every turn
 5. Escalates if `--guardrail` rounds are exceeded without consensus
 
-### Adapter Pattern (`adapters/`)
-
-Each AI model gets an adapter that implements the same interface. This keeps the orchestrator model-agnostic.
-
-- **`claude-adapter.ts`** — Spawns the `claude` CLI as a child process, communicates via stdin/stdout. Supports `--dangerously-skip-permissions` in `--yolo` mode.
-- **`codex-adapter.ts`** — Uses the `@openai/codex-sdk`. Configurable sandbox mode, web search, network access, reasoning effort.
-
-### Convergence Detection (`convergence.ts`)
+#### Convergence Detection (`convergence.ts`)
 
 Determines when the debate is over. Looks for:
 
@@ -71,36 +90,57 @@ Determines when the debate is over. Looks for:
 - Diff stability — when proposed solutions stop materially changing
 - Convergence signals in agent responses (`agree` / `disagree` / `partial` / `defer`)
 
-### Session Persistence (`session.ts`)
-
-Every debate is saved to `~/.topg/sessions/<session-id>/`:
-
-```
-├── meta.json           # Config, status, timestamps
-├── transcript.jsonl    # Full debate transcript (append-only)
-├── artifacts/          # Code files produced during debate
-└── summary.md          # Final verdict
-```
-
-Sessions can be resumed with `--resume <id>` and managed with `topg delete` / `topg clear`.
-
-### Report Formatting (`formatter.ts`)
+#### Report Formatting (`formatter.ts`)
 
 Produces the final output in two modes:
 - **Text** — Human-readable consensus or escalation report
 - **JSON** — Machine-parseable for piping into other tools
 
-### Web Dashboard (`server.ts` + `web/public/`)
+### Collaboration Engine (`src/collaborate/`)
 
-Express server with WebSocket for real-time streaming. Shows:
-- Live debate turns as they happen
-- Agent roles and turn numbers
-- Convergence status
-- Final report
+#### Manager (`manager.ts`)
+
+Handles session-based collaboration lifecycle. Unlike the debate orchestrator, it does **not** run an autonomous loop. Each method is a single request-response exchange — the calling agent controls the flow.
+
+- `start(prompt)` — Creates session, sends prompt, returns initial response
+- `send(sessionId, message)` — Loads session, validates active status, sends with conversation history
+- `end(sessionId)` — Closes the session
+- `list(activeOnly?)` — Lists collaboration sessions
+- `resolveSessionId("--last")` — Resolves to the most recent active collaboration session
+
+**Key design:** The manager is stateless between calls. Each `start`/`send`/`end` is an independent CLI invocation. Session history is loaded from disk each time.
+
+### Adapter Pattern (`src/core/adapters/`)
+
+Each AI model gets an adapter that implements the same interface. This keeps both engines model-agnostic.
+
+- **`claude-adapter.ts`** — Spawns the `claude` CLI as a child process, communicates via stdin/stdout. Supports `--dangerously-skip-permissions` in `--yolo` mode.
+- **`codex-adapter.ts`** — Uses the `@openai/codex-sdk`. Configurable sandbox mode, web search, network access, reasoning effort.
+
+### Session Persistence (`src/core/session.ts`)
+
+Every session is saved to `~/.topg/sessions/<session-id>/`:
+
+```
+├── meta.json           # Config, status, timestamps, type (debate/collaborate)
+├── transcript.jsonl    # Full transcript (append-only)
+├── artifacts/          # Code files produced
+└── summary.md          # Final verdict (debate only)
+```
+
+Sessions are distinguished by `type` in `meta.json`:
+- `"debate"` — Both agents participate (initiator/reviewer roles)
+- `"collaborate"` — One agent is the collaborator (caller/collaborator roles)
+
+Status values: `active`, `paused`, `completed`, `escalated` (debate), `closed` (collaborate).
+
+Sessions can be managed with `topg session delete`, `topg session clear`, and `topg session list`.
 
 ---
 
 ## Message Flow
+
+### Debate
 
 ```
 User Prompt
@@ -127,11 +167,30 @@ Orchestrator
   Report
 ```
 
+### Collaborate
+
+```
+Calling Agent                TOPG CLI              Collaborator
+     │                          │                       │
+     ├── start ────────────────→│── prompt ────────────→│
+     │                          │←─ response ──────────│
+     │←── { sessionId, ... } ──│                       │
+     │                          │                       │
+     │ (does other work...)     │                       │
+     │                          │                       │
+     ├── send ─────────────────→│── history + msg ────→│
+     │                          │←─ response ──────────│
+     │←── { response, ... } ───│                       │
+     │                          │                       │
+     ├── end ──────────────────→│── close session      │
+     │←── { status: closed } ──│                       │
+```
+
 Each message carries:
-- `role` — initiator or reviewer
+- `role` — initiator/reviewer (debate) or caller/collaborator (collaborate)
 - `agent` — claude or codex
 - `turn` — sequential number
-- `convergenceSignal` — agree / disagree / partial / defer
+- `convergenceSignal` — agree / disagree / partial / defer (debate only)
 - `artifacts` — any code files produced
 - `toolActivities` — commands run, files changed, web searches
 

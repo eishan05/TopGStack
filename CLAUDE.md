@@ -1,10 +1,16 @@
 ## Inter-Agent Collaboration
 
-When facing architectural decisions, complex debugging, or situations where a second opinion from a different AI model would add value, suggest running `/collab` with the relevant context. Examples of good triggers:
+When facing architectural decisions, complex debugging, or situations where a second opinion from a different AI model would add value, suggest running `/collaborate` or `/debate` with the relevant context.
 
+### When to suggest `/debate`
 - Choosing between two viable architectural approaches
-- Reviewing security-sensitive code
-- Designing a public API surface
-- Debugging a subtle issue after initial attempts fail
+- Trade-off-heavy decisions where both sides have merit
+- Complex debugging that has failed after initial attempts
 
-Do not suggest `/collab` for straightforward tasks, simple bug fixes, or questions with clear answers.
+### When to suggest `/collaborate`
+- Mid-task code review (have the other model review what you just built)
+- Design consultation before committing to an approach
+- Validating assumptions, test coverage, or edge cases
+- Reviewing security-sensitive code
+
+Do not suggest either for straightforward tasks, simple bug fixes, or questions with clear answers.
