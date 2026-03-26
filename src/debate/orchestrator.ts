@@ -1,0 +1,507 @@
+import type { AgentAdapter } from "../core/adapters/agent-adapter.js";
+import type { Message, AgentName } from "../core/types.js";
+import type { DebateConfig, DebateResult } from "./types.js";
+import { detectConvergence, checkDiffStability } from "./convergence.js";
+import { initiatorPrompt, reviewerPrompt, rebuttalPrompt, escalationPrompt, userGuidancePrompt, formatTurnPrompt, synthesisPrompt } from "./prompts.js";
+import { formatConsensus, formatEscalation } from "./formatter.js";
+import { SessionManager } from "../core/session.js";
+import { capitalize } from "../core/utils.js";
+
+export type TurnCallback = (turn: number, agent: AgentName, role: string) => void;
+export type TurnCompleteCallback = (message: Message) => void;
+
+export interface OrchestratorCallbacks {
+  onTurnStart?: TurnCallback;
+  onTurnComplete?: TurnCompleteCallback;
+}
+
+export class Orchestrator {
+  private agentA: AgentAdapter;
+  private agentB: AgentAdapter;
+  private session: SessionManager;
+  private config: DebateConfig;
+  private onTurnStart?: TurnCallback;
+  private onTurnComplete?: TurnCompleteCallback;
+
+  constructor(
+    agentA: AgentAdapter,
+    agentB: AgentAdapter,
+    session: SessionManager,
+    config: DebateConfig,
+    callbacks?: OrchestratorCallbacks
+  ) {
+    this.agentA = config.startWith === agentA.name ? agentA : agentB;
+    this.agentB = config.startWith === agentA.name ? agentB : agentA;
+    this.config = config;
+    this.session = session;
+    this.onTurnStart = callbacks?.onTurnStart;
+    this.onTurnComplete = callbacks?.onTurnComplete;
+  }
+
+  async run(userPrompt: string): Promise<DebateResult> {
+    const meta = this.session.create(userPrompt, "debate", this.config as unknown as Record<string, unknown>);
+    const messages: Message[] = [];
+    let turn = 0;
+
+    // Turn 1: Initiator
+    turn++;
+    this.onTurnStart?.(turn, this.agentA.name, "initiator");
+    const initResponse = await this.agentA.send(
+      formatTurnPrompt(initiatorPrompt(this.agentB.name), [], userPrompt),
+      {
+        sessionId: meta.sessionId,
+        history: messages,
+        workingDirectory: this.config.workingDirectory,
+        systemPrompt: initiatorPrompt(this.agentB.name),
+      }
+    );
+
+    const initMsg = this.toMessage("initiator", this.agentA.name, turn, "code", initResponse);
+    messages.push(initMsg);
+    this.session.appendMessage(meta.sessionId, initMsg);
+    this.onTurnComplete?.(initMsg);
+
+    // Turn 2+: Review loop
+    let currentReviewer = this.agentB;
+    let currentInitiator = this.agentA;
+
+    while (turn < this.config.guardrailRounds) {
+      turn++;
+
+      // Reviewer turn
+      const isFirstReview = turn === 2;
+      const sysPrompt = isFirstReview
+        ? reviewerPrompt(currentInitiator.name)
+        : rebuttalPrompt(currentInitiator.name);
+
+      this.onTurnStart?.(turn, currentReviewer.name, isFirstReview ? "reviewer" : "rebuttal");
+      const reviewResponse = await currentReviewer.send(
+        formatTurnPrompt(sysPrompt, messages, userPrompt),
+        {
+          sessionId: meta.sessionId,
+          history: messages,
+          workingDirectory: this.config.workingDirectory,
+          systemPrompt: sysPrompt,
+        }
+      );
+
+      const reviewMsg = this.toMessage(
+        "reviewer",
+        currentReviewer.name,
+        turn,
+        "review",
+        reviewResponse
+      );
+      messages.push(reviewMsg);
+      this.session.appendMessage(meta.sessionId, reviewMsg);
+      this.onTurnComplete?.(reviewMsg);
+
+      // Check convergence
+      if (detectConvergence(messages, turn) || (turn > 3 && checkDiffStability(messages))) {
+        return this.finishConsensus(messages, userPrompt, meta.sessionId, turn);
+      }
+
+      // Swap roles for next cycle
+      [currentReviewer, currentInitiator] = [currentInitiator, currentReviewer];
+    }
+
+    // Escalation: ask both for final summaries (in parallel, independent context)
+    turn++;
+    const { escMsgA, escMsgB } = await this.runEscalation(messages, userPrompt, meta.sessionId, turn);
+    messages.push(escMsgA, escMsgB);
+    this.session.appendMessage(meta.sessionId, escMsgA);
+    this.onTurnComplete?.(escMsgA);
+    this.session.appendMessage(meta.sessionId, escMsgB);
+    this.onTurnComplete?.(escMsgB);
+
+    const summary = formatEscalation(messages, this.config.guardrailRounds);
+    this.session.saveSummary(meta.sessionId, summary);
+    this.session.updateStatus(meta.sessionId, "escalated");
+    return { type: "escalation", sessionId: meta.sessionId, rounds: this.config.guardrailRounds, summary, messages };
+  }
+
+  async runWithHistory(
+    userPrompt: string,
+    existingMessages: Message[],
+    sessionId: string,
+    signal?: AbortSignal
+  ): Promise<DebateResult> {
+    const messages: Message[] = [...existingMessages];
+    let turn = Math.max(...existingMessages.map((m) => m.turn), 0);
+    const segmentStart = turn;
+
+    // Turn 1: Initiator
+    turn++;
+    this.onTurnStart?.(turn, this.agentA.name, "initiator");
+    const initResponse = await this.agentA.send(
+      formatTurnPrompt(initiatorPrompt(this.agentB.name), messages, userPrompt),
+      {
+        sessionId,
+        history: messages,
+        workingDirectory: this.config.workingDirectory,
+        systemPrompt: initiatorPrompt(this.agentB.name),
+      },
+      signal
+    );
+
+    const initMsg = this.toMessage("initiator", this.agentA.name, turn, "code", initResponse);
+    messages.push(initMsg);
+    this.session.appendMessage(sessionId, initMsg);
+    this.onTurnComplete?.(initMsg);
+
+    // Review loop
+    let currentReviewer = this.agentB;
+    let currentInitiator = this.agentA;
+    const maxTurn = turn + this.config.guardrailRounds - 1;
+
+    while (turn < maxTurn) {
+      turn++;
+
+      const isFirstReview = messages.filter(m => m.type !== "user-prompt").length === 2 + existingMessages.filter(m => m.type !== "user-prompt").length;
+      const sysPrompt = isFirstReview
+        ? reviewerPrompt(currentInitiator.name)
+        : rebuttalPrompt(currentInitiator.name);
+
+      this.onTurnStart?.(turn, currentReviewer.name, isFirstReview ? "reviewer" : "rebuttal");
+      const reviewResponse = await currentReviewer.send(
+        formatTurnPrompt(sysPrompt, messages, userPrompt),
+        {
+          sessionId,
+          history: messages,
+          workingDirectory: this.config.workingDirectory,
+          systemPrompt: sysPrompt,
+        },
+        signal
+      );
+
+      const reviewMsg = this.toMessage("reviewer", currentReviewer.name, turn, "review", reviewResponse);
+      messages.push(reviewMsg);
+      this.session.appendMessage(sessionId, reviewMsg);
+      this.onTurnComplete?.(reviewMsg);
+
+      const segmentRounds = turn - segmentStart;
+      if (detectConvergence(messages, segmentRounds) || (segmentRounds > 3 && checkDiffStability(messages))) {
+        return this.finishConsensus(messages, userPrompt, sessionId, turn, signal);
+      }
+
+      [currentReviewer, currentInitiator] = [currentInitiator, currentReviewer];
+    }
+
+    // Escalation (in parallel, independent context)
+    turn++;
+    const { escMsgA, escMsgB } = await this.runEscalation(messages, userPrompt, sessionId, turn, signal);
+    messages.push(escMsgA, escMsgB);
+    this.session.appendMessage(sessionId, escMsgA);
+    this.onTurnComplete?.(escMsgA);
+    this.session.appendMessage(sessionId, escMsgB);
+    this.onTurnComplete?.(escMsgB);
+
+    const summary = formatEscalation(messages, turn);
+    this.session.saveSummary(sessionId, summary);
+    this.session.updateStatus(sessionId, "escalated");
+    return { type: "escalation", sessionId, rounds: turn, summary, messages };
+  }
+
+  async resume(sessionId: string, userGuidance?: string): Promise<DebateResult> {
+    const { meta, messages } = this.session.load(sessionId);
+    const lastTurn = messages.length > 0 ? messages[messages.length - 1].turn : 0;
+
+    // If user provided guidance, continue with it
+    if (userGuidance) {
+      const fakeResult: DebateResult = {
+        type: "escalation",
+        sessionId,
+        rounds: lastTurn,
+        summary: "",
+        messages,
+      };
+      return this.continueWithGuidance(fakeResult, userGuidance, sessionId);
+    }
+
+    // Otherwise, pick up where we left off — re-enter the review loop
+    const userPrompt = meta.prompt;
+    let turn = lastTurn;
+
+    // Determine whose turn it is next based on message count
+    let currentReviewer: AgentAdapter;
+    let currentInitiator: AgentAdapter;
+    if (messages.length % 2 === 1) {
+      // Odd number of messages — agent B (reviewer) goes next
+      currentReviewer = this.agentB;
+      currentInitiator = this.agentA;
+    } else {
+      currentReviewer = this.agentA;
+      currentInitiator = this.agentB;
+    }
+
+    this.session.updateStatus(sessionId, "active");
+
+    // If convergence was already reached before pause (e.g. paused during synthesis),
+    // go straight to synthesis instead of creating another review turn
+    if (detectConvergence(messages, turn) || (turn > 3 && checkDiffStability(messages))) {
+      return this.finishConsensus(messages, userPrompt, sessionId, turn);
+    }
+
+    while (turn < lastTurn + this.config.guardrailRounds) {
+      turn++;
+
+      this.onTurnStart?.(turn, currentReviewer.name, "rebuttal");
+      const reviewResponse = await currentReviewer.send(
+        formatTurnPrompt(rebuttalPrompt(currentInitiator.name), messages, userPrompt),
+        {
+          sessionId,
+          history: messages,
+          workingDirectory: this.config.workingDirectory,
+          systemPrompt: rebuttalPrompt(currentInitiator.name),
+        }
+      );
+
+      const reviewMsg = this.toMessage("reviewer", currentReviewer.name, turn, "review", reviewResponse);
+      messages.push(reviewMsg);
+      this.session.appendMessage(sessionId, reviewMsg);
+      this.onTurnComplete?.(reviewMsg);
+
+      const segmentRounds = turn - lastTurn;
+      if (detectConvergence(messages, segmentRounds) || (segmentRounds > 3 && checkDiffStability(messages))) {
+        return this.finishConsensus(messages, userPrompt, sessionId, turn);
+      }
+
+      [currentReviewer, currentInitiator] = [currentInitiator, currentReviewer];
+    }
+
+    // Escalation (in parallel, independent context)
+    turn++;
+    const { escMsgA, escMsgB } = await this.runEscalation(messages, userPrompt, sessionId, turn);
+    messages.push(escMsgA, escMsgB);
+    this.session.appendMessage(sessionId, escMsgA);
+    this.onTurnComplete?.(escMsgA);
+    this.session.appendMessage(sessionId, escMsgB);
+    this.onTurnComplete?.(escMsgB);
+
+    const summary = formatEscalation(messages, turn);
+    this.session.saveSummary(sessionId, summary);
+    this.session.updateStatus(sessionId, "escalated");
+    return { type: "escalation", sessionId, rounds: turn, summary, messages };
+  }
+
+  async continueWithGuidance(
+    previousResult: DebateResult,
+    userGuidance: string,
+    sessionId: string,
+    signal?: AbortSignal
+  ): Promise<DebateResult> {
+    const messages = [...previousResult.messages];
+    const userPrompt = userGuidance;
+    let turn = previousResult.rounds + 2; // after escalation turns
+    const segmentStart = turn;
+
+    // Inject user guidance as a special message
+    const guidanceMsg: Message = {
+      role: "initiator",
+      agent: "claude",
+      turn,
+      type: "user-guidance",
+      content: `[USER GUIDANCE]: ${userGuidance}`,
+      timestamp: new Date().toISOString(),
+    };
+    messages.push(guidanceMsg);
+    this.session.appendMessage(sessionId, guidanceMsg);
+    this.onTurnComplete?.(guidanceMsg);
+    this.session.updateStatus(sessionId, "active");
+
+    // Agent A responds to user guidance
+    turn++;
+    this.onTurnStart?.(turn, this.agentA.name, "guided");
+    const responseA = await this.agentA.send(
+      formatTurnPrompt(userGuidancePrompt(this.agentB.name), messages, userGuidance),
+      {
+        sessionId,
+        history: messages,
+        workingDirectory: this.config.workingDirectory,
+        systemPrompt: userGuidancePrompt(this.agentB.name),
+      },
+      signal
+    );
+    const msgA = this.toMessage("initiator", this.agentA.name, turn, "review", responseA);
+    messages.push(msgA);
+    this.session.appendMessage(sessionId, msgA);
+    this.onTurnComplete?.(msgA);
+
+    // Review loop (same as main run)
+    let currentReviewer = this.agentB;
+    let currentInitiator = this.agentA;
+
+    for (let round = 0; round < this.config.guardrailRounds; round++) {
+      turn++;
+
+      this.onTurnStart?.(turn, currentReviewer.name, "rebuttal");
+      const reviewResponse = await currentReviewer.send(
+        formatTurnPrompt(rebuttalPrompt(currentInitiator.name), messages, userGuidance),
+        {
+          sessionId,
+          history: messages,
+          workingDirectory: this.config.workingDirectory,
+          systemPrompt: rebuttalPrompt(currentInitiator.name),
+        },
+        signal
+      );
+
+      const reviewMsg = this.toMessage("reviewer", currentReviewer.name, turn, "review", reviewResponse);
+      messages.push(reviewMsg);
+      this.session.appendMessage(sessionId, reviewMsg);
+      this.onTurnComplete?.(reviewMsg);
+
+      const segmentRounds = turn - segmentStart;
+      if (detectConvergence(messages, segmentRounds) || (segmentRounds > 3 && checkDiffStability(messages))) {
+        return this.finishConsensus(messages, userPrompt, sessionId, turn, signal);
+      }
+
+      [currentReviewer, currentInitiator] = [currentInitiator, currentReviewer];
+    }
+
+    // Escalate again (in parallel, independent context)
+    turn++;
+    const { escMsgA, escMsgB } = await this.runEscalation(messages, userGuidance, sessionId, turn, signal);
+    messages.push(escMsgA, escMsgB);
+    this.session.appendMessage(sessionId, escMsgA);
+    this.onTurnComplete?.(escMsgA);
+    this.session.appendMessage(sessionId, escMsgB);
+    this.onTurnComplete?.(escMsgB);
+
+    const summary = formatEscalation(messages, turn);
+    this.session.saveSummary(sessionId, summary);
+    this.session.updateStatus(sessionId, "escalated");
+    return { type: "escalation", sessionId, rounds: turn, summary, messages };
+  }
+
+  private async finishConsensus(
+    messages: Message[],
+    userPrompt: string,
+    sessionId: string,
+    debateRounds: number,
+    signal?: AbortSignal
+  ): Promise<DebateResult> {
+    const synthTurn = debateRounds + 1;
+    this.onTurnStart?.(synthTurn, this.agentA.name, "synthesis");
+
+    const synthesized = await this.synthesize(
+      messages, userPrompt,
+      { initiator: this.agentA, reviewer: this.agentB },
+      signal
+    );
+    const summary = synthesized || formatConsensus(messages, debateRounds);
+
+    // Add consensus message to the thread so it's visible on the dashboard
+    const consensusMsg = this.toMessage("initiator", this.agentA.name, synthTurn, "consensus", { content: summary });
+    messages.push(consensusMsg);
+    this.session.appendMessage(sessionId, consensusMsg);
+    this.onTurnComplete?.(consensusMsg);
+
+    this.session.saveSummary(sessionId, summary);
+    this.session.updateStatus(sessionId, "completed");
+    return { type: "consensus", sessionId, rounds: debateRounds, summary, messages };
+  }
+
+  private async synthesize(
+    messages: Message[],
+    userPrompt: string,
+    agents: { initiator: AgentAdapter; reviewer: AgentAdapter },
+    signal?: AbortSignal
+  ): Promise<string | null> {
+    try {
+      const transcript = messages
+        .map((m) => {
+          if (m.type === "user-prompt") return `[User's Original Request]:\n${m.content}`;
+          if (m.type === "user-guidance") return `[User Guidance]:\n${m.content}`;
+          return `[${capitalize(m.agent)} — ${m.type}]:\n${m.content}`;
+        })
+        .join("\n\n---\n\n");
+
+      const prompt = `${synthesisPrompt()}\n\n## Original User Request\n\n${userPrompt}\n\n## Collaboration Transcript\n\n${transcript}`;
+
+      const response = await agents.initiator.send(prompt, {
+        sessionId: "",
+        history: messages,
+        workingDirectory: this.config.workingDirectory,
+        systemPrompt: synthesisPrompt(),
+      }, signal);
+
+      return response.content?.trim() || null;
+    } catch (err: unknown) {
+      // Re-throw abort errors so cancellation propagates correctly
+      // (mirrors the abort handling in runEscalation)
+      if (err instanceof Error && err.message === "aborted") {
+        throw err;
+      }
+      return null; // Fallback to formatConsensus behavior
+    }
+  }
+
+  private async runEscalation(
+    messages: Message[],
+    userPrompt: string,
+    sessionId: string,
+    turn: number,
+    signal?: AbortSignal
+  ): Promise<{ escMsgA: Message; escMsgB: Message }> {
+    const escPrompt = escalationPrompt();
+    const messagesBeforeEsc = [...messages];
+
+    this.onTurnStart?.(turn, this.agentA.name, "escalation");
+    this.onTurnStart?.(turn, this.agentB.name, "escalation");
+
+    const prompt = formatTurnPrompt(escPrompt, messagesBeforeEsc, userPrompt);
+    const ctx = { sessionId, history: messagesBeforeEsc, workingDirectory: this.config.workingDirectory, systemPrompt: escPrompt };
+
+    const [resultA, resultB] = await Promise.allSettled([
+      this.agentA.send(prompt, ctx, signal),
+      this.agentB.send(prompt, ctx, signal),
+    ]);
+
+    // If either call was aborted (user cancellation), re-throw immediately
+    // so the caller's abort handler runs instead of fabricating a summary.
+    const abortedResult = [resultA, resultB].find(
+      (r) => r.status === "rejected" && r.reason?.message === "aborted"
+    );
+    if (abortedResult) {
+      throw (abortedResult as PromiseRejectedResult).reason;
+    }
+
+    const escResponseA = resultA.status === "fulfilled"
+      ? resultA.value
+      : { content: `[Escalation failed: ${resultA.reason?.message ?? "unknown error"}]` };
+    const escResponseB = resultB.status === "fulfilled"
+      ? resultB.value
+      : { content: `[Escalation failed: ${resultB.reason?.message ?? "unknown error"}]` };
+
+    // If both failed (non-abort), throw so the caller can handle it
+    if (resultA.status === "rejected" && resultB.status === "rejected") {
+      throw new Error(`Both escalation calls failed: ${resultA.reason?.message}; ${resultB.reason?.message}`);
+    }
+
+    const escMsgA = this.toMessage("initiator", this.agentA.name, turn, "deadlock", escResponseA);
+    const escMsgB = this.toMessage("reviewer", this.agentB.name, turn, "deadlock", escResponseB);
+
+    return { escMsgA, escMsgB };
+  }
+
+  private toMessage(
+    role: "initiator" | "reviewer",
+    agent: AgentName,
+    turn: number,
+    type: Message["type"],
+    response: { content: string; artifacts?: any[]; toolActivities?: any[]; convergenceSignal?: any }
+  ): Message {
+    return {
+      role,
+      agent,
+      turn,
+      type,
+      content: response.content,
+      artifacts: response.artifacts,
+      toolActivities: response.toolActivities,
+      convergenceSignal: response.convergenceSignal,
+      timestamp: new Date().toISOString(),
+    };
+  }
+}
